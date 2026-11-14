@@ -2,8 +2,9 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { CompareResult, Manifest, Poi, RouteResult, Stop, WeatherSol } from "../types";
-import { DEFAULT_EVA, evaPlan, toblerSpeed } from "./eva";
-import { buildReportPdf, pdfText, type ReportInput } from "./report";
+import { DEFAULT_EVA, evaPlan, teamEvaPlan, toblerSpeed } from "./eva";
+import { buildReportPdf, missingGlyphs, pdfText, type ReportFonts, type ReportInput } from "./report";
+import { teamSummary } from "./team";
 import { routeAlerts } from "./safety";
 
 const DATA = resolve(__dirname, "../../public/data");
@@ -53,10 +54,17 @@ describe("Mission report PDF", () => {
     generatedAt: new Date("2026-11-14T12:00:00Z"),
   };
 
-  it("builds a multi-page PDF that reflects the selected plan", () => {
-    const doc = buildReportPdf(input, null, null);
+  const fonts: ReportFonts = {
+    regular: readFileSync(resolve(__dirname, "../../node_modules/@expo-google-fonts/inter/400Regular/Inter_400Regular.ttf")).toString("base64"),
+    bold: readFileSync(resolve(__dirname, "../../node_modules/@expo-google-fonts/inter/700Bold/Inter_700Bold.ttf")).toString("base64"),
+  };
+  const logOf = (d: unknown) => (d as { textLog: string[] }).textLog.join("\n");
+
+  it("builds a multi-page solo PDF that reflects the selected plan (embedded Unicode font)", () => {
+    const doc = buildReportPdf(input, null, null, fonts);
+    expect((doc as unknown as { reportFont: string }).reportFont).toBe("Inter");
     expect(doc.getNumberOfPages()).toBeGreaterThanOrEqual(2);
-    const raw = doc.output();
+    const text = logOf(doc).toLowerCase();
     for (const s of [
       "Marswalk Report Test",
       "Investigate evidence of ancient water",
@@ -68,15 +76,66 @@ describe("Mission report PDF", () => {
       "Mars 2020 Terrain Relative Navigation CTX DTM Mosaic",
       "P906QQT8",
       "archived MEDA",
+      "25° (planning assumption)",
       formatKm(lr.distance_m),
     ]) {
-      expect(raw.toLowerCase(), s).toContain(s.toLowerCase());
+      expect(text, s).toContain(s.toLowerCase());
     }
+    // the font file is embedded in the PDF
+    expect(doc.output()).toContain("/FontFile2");
   });
 
-  it("maps characters outside the PDF font to safe equivalents", () => {
+  it("keeps special characters intact with the embedded font", () => {
+    const doc = buildReportPdf({ ...input, notes: "Ch'ał outcrop · Séítah ≥ 15° − 2 → ≈ 3 km² Δh Σ √ … “quoted”" }, null, null, fonts);
+    const text = logOf(doc);
+    expect(text).toContain("Ch'ał outcrop · Séítah ≥ 15° − 2 → ≈ 3 km² Δh Σ √ … “quoted”");
+    // every character the report uses is drawable by Inter
+    expect(missingGlyphs(doc, "Inter", "ałóéíÉ°·−≥≤≈→…’“”ΔΣ√²×—–")).toEqual([]);
+  });
+
+  it("falls back to Latin-1 substitutions only without the embedded font", () => {
     expect(pdfText("Ch'ał ≥ 15° − 2")).toBe("Ch'al >= 15° - 2");
     expect(pdfText("Séítah")).toBe("Séítah");
+    const doc = buildReportPdf({ ...input, notes: "Ch'ał ≥ 15°" }, null, null, null);
+    expect((doc as unknown as { reportFont: string }).reportFont).toBe("helvetica");
+    expect(logOf(doc)).toContain("Ch'al >= 15°");
+  });
+
+  it("builds a two-astronaut PDF with per-astronaut and combined EVA requirements", () => {
+    const ra = { ...lr, stop_indices: [0, 2, 4] };
+    const rb = { ...fa, stop_indices: [0, 2, 4] };
+    const ret = route([-2548, -2552, -2560], [2, 3, 2], 500);
+    const summary = teamSummary(ra, rb, 20);
+    const teamEvaRes = teamEvaPlan(
+      { arriveMeetMinA: summary.a.arriveMeetMin, arriveMeetMinB: summary.b.arriveMeetMin, meetMin: summary.meetMin, scienceMin: 20 },
+      ret,
+      ret,
+      eva,
+    );
+    const landingStop = stops[0];
+    const doc = buildReportPdf(
+      {
+        ...input,
+        mode: "team",
+        route: null,
+        compare: null,
+        team: {
+          stops: { aStart: landingStop, aDest: stops[1], bStart: landingStop, bDest: stops[1], meet: landingStop },
+          routes: { A: ra, B: rb, Aret: ret, Bret: ret },
+          summary,
+          errors: {},
+          eva: teamEvaRes,
+        },
+      },
+      null,
+      null,
+      fonts,
+    );
+    const text = logOf(doc);
+    for (const s of ["Two-astronaut plan", "Team EVA resources", "Astronaut A", "Astronaut B", "Leave rendezvous by", "Combined oxygen", "both suits", "Mission length"]) {
+      expect(text, s).toContain(s);
+    }
+    expect(text).toContain(`${teamEvaRes.o2!.used.toFixed(2)} of ${teamEvaRes.o2!.budget.toFixed(2)} kg`);
   });
 });
 

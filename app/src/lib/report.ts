@@ -1,7 +1,11 @@
 import { jsPDF } from "jspdf";
+// Inter (SIL Open Font License 1.1) via @expo-google-fonts/inter: covers Latin Extended, Greek, arrows and math symbols.
+import interBoldUrl from "@expo-google-fonts/inter/700Bold/Inter_700Bold.ttf?url";
+import interRegularUrl from "@expo-google-fonts/inter/400Regular/Inter_400Regular.ttf?url";
 import type { CompareResult, EvaSettings, LonLat, Manifest, MissionMode, Objective, Poi, RouteResult, Stop, TeamSlot, WeatherSol } from "../types";
 import { OBJECTIVE_META, OBJECTIVE_ORDER, explainComparison } from "./compare";
-import { fmtMin, type EvaPlan } from "./eva";
+import { fmtMin, type EvaPlan, type TeamEva } from "./eva";
+import { placeLabels, type Rect } from "./labels";
 import { formatDistance, formatDuration, formatLat, formatLon, metersPerDegLon, niceScale } from "./mars";
 import { NOT_CERTIFIED, SAFETY_THRESHOLDS, steepStretches, type Alert } from "./safety";
 import { MISSIONS, campaignWhy } from "./science";
@@ -19,7 +23,13 @@ export interface ReportInput {
   alerts: Alert[];
   eva: EvaSettings;
   evaPlan: EvaPlan | null;
-  team: { stops: Partial<Record<TeamSlot, Stop>>; routes: { A?: RouteResult; B?: RouteResult }; summary: TeamSummary | null; errors: { A?: string; B?: string } } | null;
+  team: {
+    stops: Partial<Record<TeamSlot, Stop>>;
+    routes: { A?: RouteResult; B?: RouteResult; Aret?: RouteResult; Bret?: RouteResult };
+    summary: TeamSummary | null;
+    errors: { A?: string; B?: string };
+    eva?: TeamEva | null;
+  } | null;
   manifest: Manifest;
   weather: WeatherSol[];
   pois: Poi[];
@@ -36,7 +46,7 @@ const ROSE: [number, number, number] = [217, 142, 186];
 const INK: [number, number, number] = [40, 38, 60];
 const MUTED: [number, number, number] = [110, 106, 140];
 
-/** jsPDF's built-in fonts only cover Latin-1, so map other characters to safe equivalents. */
+/** Fallback used only with jsPDF's built-in Helvetica (Latin-1): map other characters to safe equivalents. */
 export function pdfText(t: string): string {
   const map: Record<string, string> = {
     "−": "-", "–": "-", "—": "-", "≥": ">=", "≤": "<=", "≈": "~", "→": "->", "…": "...", "’": "'", "‘": "'", "“": '"', "”": '"',
@@ -47,14 +57,49 @@ export function pdfText(t: string): string {
 
 const ROLE: Record<string, string> = { start: "Start", waypoint: "Waypoint", destination: "Destination" };
 
+/** Base64-encoded TTF data for the embedded Unicode font (Inter, SIL Open Font License). */
+export interface ReportFonts {
+  regular: string;
+  bold: string;
+}
+
+/** Characters the font cannot draw are replaced; everything the font covers is kept as-is. */
+const FALLBACK: Record<string, string> = { "⚠": "!", "✓": "v", "★": "*" };
+
+function makeSafe(doc: jsPDF, font: string): (t: string) => string {
+  if (font === "helvetica") return pdfText;
+  const fontObj = (doc.internal as unknown as { getFont: (n: string, s: string) => { metadata?: { cmap?: { unicode?: { codeMap?: Record<number, number> } } } } }).getFont(font, "normal");
+  const codeMap = fontObj?.metadata?.cmap?.unicode?.codeMap;
+  if (!codeMap) return pdfText;
+  return (t: string) =>
+    Array.from(t)
+      .map((ch) => {
+        const cp = ch.codePointAt(0)!;
+        if (cp < 32 || codeMap[cp]) return ch;
+        return FALLBACK[ch] ?? pdfText(ch);
+      })
+      .join("");
+}
+
+/** Which characters in `t` the embedded font cannot draw (used by tests). */
+export function missingGlyphs(doc: jsPDF, font: string, t: string): string[] {
+  const fontObj = (doc.internal as unknown as { getFont: (n: string, s: string) => { metadata?: { cmap?: { unicode?: { codeMap?: Record<number, number> } } } } }).getFont(font, "normal");
+  const codeMap = fontObj?.metadata?.cmap?.unicode?.codeMap ?? {};
+  return Array.from(new Set(Array.from(t))).filter((ch) => (ch.codePointAt(0) ?? 0) >= 32 && !codeMap[ch.codePointAt(0)!]);
+}
+
 class Writer {
   doc: jsPDF;
   y = 0;
   readonly M = 16;
   readonly W: number;
   readonly H: number;
-  constructor(doc: jsPDF) {
+  font: string;
+  safe: (t: string) => string;
+  constructor(doc: jsPDF, font: string, safe: (t: string) => string) {
     this.doc = doc;
+    this.font = font;
+    this.safe = safe;
     this.W = doc.internal.pageSize.getWidth();
     this.H = doc.internal.pageSize.getHeight();
   }
@@ -68,14 +113,14 @@ class Writer {
     const d = this.doc;
     d.setFillColor(...NAVY);
     d.rect(0, 0, this.W, 11, "F");
-    d.setFont("helvetica", "bold");
+    d.setFont(this.font, "bold");
     d.setFontSize(9);
     d.setTextColor(241, 237, 245);
     d.text("PAWPRINT", this.M, 7.2);
     d.setTextColor(...ROSE);
-    d.text("MARS", this.M + 17.5, 7.2);
+    d.text("MARS", this.M + d.getTextWidth("PAWPRINT "), 7.2);
     d.setTextColor(200, 196, 220);
-    d.setFont("helvetica", "normal");
+    d.setFont(this.font, "normal");
     d.text("Mission Report", this.W - this.M, 7.2, { align: "right" });
     this.y = 19;
   }
@@ -84,19 +129,19 @@ class Writer {
     const d = this.doc;
     d.setFillColor(...color);
     d.rect(this.M, this.y - 3.6, 2.2, 5.2, "F");
-    d.setFont("helvetica", "bold");
+    d.setFont(this.font, "bold");
     d.setFontSize(13);
     d.setTextColor(...INK);
-    d.text(pdfText(t), this.M + 5, this.y + 0.8);
+    d.text(this.safe(t), this.M + 5, this.y + 0.8);
     this.y += 7.5;
   }
   p(t: string, opts: { size?: number; color?: [number, number, number]; bold?: boolean; indent?: number; gap?: number } = {}) {
     const d = this.doc;
     const size = opts.size ?? 9.5;
-    d.setFont("helvetica", opts.bold ? "bold" : "normal");
+    d.setFont(this.font, opts.bold ? "bold" : "normal");
     d.setFontSize(size);
     d.setTextColor(...(opts.color ?? INK));
-    const lines = d.splitTextToSize(pdfText(t), this.W - 2 * this.M - (opts.indent ?? 0)) as string[];
+    const lines = d.splitTextToSize(this.safe(t), this.W - 2 * this.M - (opts.indent ?? 0)) as string[];
     const lh = size * 0.43;
     for (const ln of lines) {
       this.ensure(lh + 1);
@@ -108,12 +153,12 @@ class Writer {
   kv(rows: [string, string][], colW = 52) {
     const d = this.doc;
     for (const [k, v] of rows) {
-      const lines = d.splitTextToSize(pdfText(v), this.W - 2 * this.M - colW) as string[];
+      const lines = d.splitTextToSize(this.safe(v), this.W - 2 * this.M - colW) as string[];
       this.ensure(lines.length * 4.1 + 1);
-      d.setFont("helvetica", "normal");
+      d.setFont(this.font, "normal");
       d.setFontSize(9);
       d.setTextColor(...MUTED);
-      d.text(pdfText(k), this.M, this.y);
+      d.text(this.safe(k), this.M, this.y);
       d.setTextColor(...INK);
       lines.forEach((ln, i) => d.text(ln, this.M + colW, this.y + i * 4.1));
       this.y += lines.length * 4.1 + 0.8;
@@ -124,9 +169,9 @@ class Writer {
     const d = this.doc;
     const x0 = this.M;
     const drawRow = (cells: string[], header: boolean) => {
-      d.setFont("helvetica", header ? "bold" : "normal");
+      d.setFont(this.font, header ? "bold" : "normal");
       d.setFontSize(8.5);
-      const wrapped = cells.map((c, i) => d.splitTextToSize(pdfText(c), widths[i] - 2.5) as string[]);
+      const wrapped = cells.map((c, i) => d.splitTextToSize(this.safe(c), widths[i] - 2.5) as string[]);
       const h = Math.max(...wrapped.map((w) => w.length)) * 3.7 + 2.4;
       this.ensure(h + 1);
       if (header) {
@@ -149,9 +194,9 @@ class Writer {
   }
   callout(title: string, body: string, color: [number, number, number]) {
     const d = this.doc;
-    d.setFont("helvetica", "normal");
+    d.setFont(this.font, "normal");
     d.setFontSize(8.8);
-    const lines = d.splitTextToSize(pdfText(body), this.W - 2 * this.M - 8) as string[];
+    const lines = d.splitTextToSize(this.safe(body), this.W - 2 * this.M - 8) as string[];
     const h = lines.length * 3.9 + 9;
     this.ensure(h + 2);
     d.setFillColor(color[0], color[1], color[2]);
@@ -159,10 +204,10 @@ class Writer {
     d.roundedRect(this.M, this.y - 4, this.W - 2 * this.M, h, 2, 2, "S");
     d.setFillColor(color[0], color[1], color[2]);
     d.rect(this.M, this.y - 4, 1.6, h, "F");
-    d.setFont("helvetica", "bold");
+    d.setFont(this.font, "bold");
     d.setTextColor(...INK);
-    d.text(pdfText(title), this.M + 5, this.y + 0.6);
-    d.setFont("helvetica", "normal");
+    d.text(this.safe(title), this.M + 5, this.y + 0.6);
+    d.setFont(this.font, "normal");
     d.setTextColor(...INK);
     lines.forEach((ln, i) => d.text(ln, this.M + 5, this.y + 5 + i * 3.9));
     this.y += h + 2;
@@ -170,9 +215,27 @@ class Writer {
 }
 
 /** Build the PDF document. mapImage / mascot are optional so this is testable without a browser canvas. */
-export function buildReportPdf(input: ReportInput, mapImage?: string | null, mascot?: HTMLImageElement | null): jsPDF {
+export function buildReportPdf(input: ReportInput, mapImage?: string | null, mascot?: HTMLImageElement | null, fonts?: ReportFonts | null): jsPDF {
   const doc = new jsPDF({ unit: "mm", format: "a4" });
-  const w = new Writer(doc);
+  let font = "helvetica";
+  if (fonts) {
+    doc.addFileToVFS("Inter-Regular.ttf", fonts.regular);
+    doc.addFont("Inter-Regular.ttf", "Inter", "normal");
+    doc.addFileToVFS("Inter-Bold.ttf", fonts.bold);
+    doc.addFont("Inter-Bold.ttf", "Inter", "bold");
+    font = "Inter";
+  }
+  const safe = makeSafe(doc, font);
+  // Record every string written: the embedded font stores text as glyph IDs, so tests read this log instead.
+  const textLog: string[] = [];
+  const origText = doc.text.bind(doc) as (...a: unknown[]) => jsPDF;
+  (doc as unknown as { text: (...a: unknown[]) => jsPDF }).text = (t: unknown, ...rest: unknown[]) => {
+    textLog.push(Array.isArray(t) ? t.join(" ") : String(t));
+    return origText(t, ...rest);
+  };
+  (doc as unknown as { textLog: string[] }).textLog = textLog;
+  (doc as unknown as { reportFont: string }).reportFont = font;
+  const w = new Writer(doc, font, safe);
   const now = input.generatedAt ?? new Date();
   const mission = MISSIONS.find((m) => m.id === input.missionId) ?? null;
   const route = input.mode === "solo" ? input.route : null;
@@ -191,31 +254,31 @@ export function buildReportPdf(input: ReportInput, mapImage?: string | null, mas
     }
   }
   const tx = mascot ? w.M + 27 : w.M;
-  doc.setFont("helvetica", "bold");
+  doc.setFont(font, "bold");
   doc.setFontSize(20);
   doc.setTextColor(241, 237, 245);
   doc.text("PAWPRINT", tx, 16);
   doc.setTextColor(...ROSE);
-  doc.text("MARS", tx + 38, 16);
-  doc.setFont("helvetica", "normal");
+  doc.text("MARS", tx + doc.getTextWidth("PAWPRINT "), 16);
+  doc.setFont(font, "normal");
   doc.setFontSize(10);
   doc.setTextColor(201, 196, 217);
   doc.text("Marswalk Mission Report · Jezero Crater, Mars", tx, 23.5);
   doc.setFontSize(8.5);
-  doc.text(pdfText(`NASA Space Apps 2026 · Interplanetary Survival Guide: Martian Map`), tx, 28.5);
+  doc.text(safe(`NASA Space Apps 2026 · Interplanetary Survival Guide: Martian Map`), tx, 28.5);
   w.y = 46;
 
-  doc.setFont("helvetica", "bold");
+  doc.setFont(font, "bold");
   doc.setFontSize(17);
   doc.setTextColor(...INK);
-  doc.text(pdfText(input.name || "Untitled Marswalk"), w.M, w.y);
+  doc.text(safe(input.name || "Untitled Marswalk"), w.M, w.y);
   w.y += 7;
   w.kv([
     ["Scientific objective", mission ? mission.title : "No science mission selected"],
     ["Mission mode", input.mode === "solo" ? "Solo Marswalk" : "Two-astronaut Marswalk"],
     ["Route option", `${OBJECTIVE_META[input.objective].label}: ${OBJECTIVE_META[input.objective].goal}`],
     ["Planning date", `${now.toLocaleString()} (${now.toISOString()})`],
-    ["Max walkable slope", `${input.maxSlope} deg (planning assumption)`],
+    ["Max walkable slope", `${input.maxSlope}° (planning assumption)`],
     ["Area", "Jezero Crater, Mars · planetocentric latitude, east-positive longitude"],
   ]);
   w.callout("Not certified for astronaut safety", NOT_CERTIFIED, ROSE);
@@ -257,8 +320,8 @@ export function buildReportPdf(input: ReportInput, mapImage?: string | null, mas
       ["Distance (3-D)", `${formatDistance(route.distance_m)} (map distance ${formatDistance(route.horizontal_distance_m)})  [derived]`],
       ["Elevation gain / loss", `+${Math.round(route.elevation_gain_m)} m / -${Math.round(route.elevation_loss_m)} m  [derived]`],
       ["Elevation range", `${Math.round(route.elevation_min_m)} to ${Math.round(route.elevation_max_m)} m relative to the Mars areoid  [derived]`],
-      ["Max / mean terrain slope", `${route.max_slope_deg.toFixed(1)} deg / ${route.mean_slope_deg.toFixed(1)} deg  [derived]`],
-      ["Slope classes along route", `<10 deg ${(f.easy * 100).toFixed(0)}% · 10-15 deg ${(f.moderate * 100).toFixed(0)}% · 15-25 deg ${(f.hazard * 100).toFixed(0)}% · >=25 deg ${(f.nogo * 100).toFixed(0)}%`],
+      ["Max / mean terrain slope", `${route.max_slope_deg.toFixed(1)}° / ${route.mean_slope_deg.toFixed(1)}°  [derived]`],
+      ["Slope classes along route", `<10° ${(f.easy * 100).toFixed(0)}% · 10–15° ${(f.moderate * 100).toFixed(0)}% · 15–25° ${(f.hazard * 100).toFixed(0)}% · ≥25° ${(f.nogo * 100).toFixed(0)}%`],
       ["Estimated walking time", `${formatDuration(route.walk_time_s)} (Tobler hiking function, Earth-based)  [estimate]`],
       ["Effort-weighted time", `${formatDuration(route.est_time_s)} (walking time with PAWPRINT slope penalty)  [estimate]`],
       ["Terrain difficulty", `${route.difficulty.label} (${route.difficulty.score}/100, PAWPRINT score)  [estimate]`],
@@ -275,7 +338,7 @@ export function buildReportPdf(input: ReportInput, mapImage?: string | null, mas
           `${OBJECTIVE_META[o].label}${o === input.objective ? " (selected)" : ""}`,
           formatDistance(c[o].distance_m),
           `+${Math.round(c[o].elevation_gain_m)} m`,
-          `${c[o].max_slope_deg.toFixed(1)} deg`,
+          `${c[o].max_slope_deg.toFixed(1)}°`,
           formatDuration(c[o].walk_time_s),
           `${c[o].difficulty.label} ${Math.round(c[o].difficulty.score)}`,
         ]),
@@ -315,7 +378,7 @@ export function buildReportPdf(input: ReportInput, mapImage?: string | null, mas
       if (r) {
         const leg = who === "A" ? t.summary?.a : t.summary?.b;
         w.kv([
-          [`Astronaut ${who}`, `${formatDistance(r.distance_m)} · +${Math.round(r.elevation_gain_m)} m · max slope ${r.max_slope_deg.toFixed(1)} deg · ${r.grid.name.toUpperCase()} ${r.grid.resolution_m} m`],
+          [`Astronaut ${who}`, `${formatDistance(r.distance_m)} · +${Math.round(r.elevation_gain_m)} m · max slope ${r.max_slope_deg.toFixed(1)}° · ${r.grid.name.toUpperCase()} ${r.grid.resolution_m} m`],
           ...(leg ? ([[`  Estimated timeline`, `destination T+${fmtMin(leg.arriveDestMin)}, leaves T+${fmtMin(leg.departDestMin)}, rendezvous T+${fmtMin(leg.arriveMeetMin)}`]] as [string, string][]) : []),
         ]);
       } else if (t.errors[who]) {
@@ -324,11 +387,39 @@ export function buildReportPdf(input: ReportInput, mapImage?: string | null, mas
     });
     if (t.summary) {
       w.kv([
-        ["Combined", `${formatDistance(t.summary.totalDistance_m)} walked · +${Math.round(t.summary.totalGain_m)} m · max slope ${t.summary.maxSlope.toFixed(1)} deg`],
+        ["Combined", `${formatDistance(t.summary.totalDistance_m)} walked · +${Math.round(t.summary.totalGain_m)} m · max slope ${t.summary.maxSlope.toFixed(1)}°`],
         ["Rendezvous (estimate)", `T+${fmtMin(t.summary.meetMin)}; ${t.summary.firstToArrive === "together" ? "both arrive at about the same time" : `Astronaut ${t.summary.firstToArrive} waits about ${fmtMin(t.summary.waitMin)}`}`],
       ]);
     }
-    w.p(`Times are estimates: Tobler walking time x pace factor ${input.eva.paceFactor} plus ${input.eva.scienceMinPerStop} min of science at each destination.`, { size: 8.2, color: MUTED });
+    w.p(`Times are estimates: Tobler walking time × pace factor ${input.eva.paceFactor} plus ${input.eva.scienceMinPerStop} min of science at each destination.`, { size: 8.2, color: MUTED });
+
+    const te = t.eva;
+    if (te) {
+      w.h2("Team EVA resources (hypothetical planning estimates)", LAV);
+      w.p("Not spacesuit telemetry and not a NASA-validated consumption model. Budgets and rates were entered by the planner and apply to each astronaut's suit.", { size: 8.5, color: MUTED });
+      const u = input.eva.o2Unit;
+      const person = (who: "A" | "B", e: EvaPlan | null) => {
+        if (!e) {
+          w.p(`Astronaut ${who}: no return route from the rendezvous to the start, so the EVA cannot be estimated.`, { color: ROSE });
+          return;
+        }
+        w.kv([
+          [`Astronaut ${who}`, `total ${fmtMin(e.totalMin)}: out ${fmtMin(e.outboundMin)}, science ${fmtMin(e.scienceMin)}, wait ${fmtMin(e.waitMin)}, back ${fmtMin(e.returnMin)}`],
+          ["  Leave rendezvous by", e.turnBackByMin !== null ? `T+${fmtMin(e.turnBackByMin)} (time left ${fmtMin(e.slackMin ?? 0)})` : "not available (enter EVA time)"],
+          ["  Oxygen", e.o2 ? `${e.o2.used.toFixed(2)} of ${e.o2.budget} ${u} used, ${e.o2.remaining.toFixed(2)} remaining (${Math.round(e.o2.remainingPct)}%)` : "budget or rate not entered"],
+          ["  Power", e.power ? `${e.power.used.toFixed(0)} of ${e.power.budget} Wh used, ${e.power.remaining.toFixed(0)} Wh remaining (${Math.round(e.power.remainingPct)}%)` : "budget or draw not entered"],
+        ]);
+      };
+      person("A", te.A);
+      person("B", te.B);
+      w.kv([
+        ["Mission length", te.missionMin !== null ? fmtMin(te.missionMin) : "—"],
+        ["Astronaut-time (A + B)", te.personMin !== null ? fmtMin(te.personMin) : "—"],
+        ["Combined oxygen", te.o2 ? `${te.o2.used.toFixed(2)} of ${te.o2.budget.toFixed(2)} ${u} (both suits), ${te.o2.remaining.toFixed(2)} remaining` : "budget or rate not entered"],
+        ["Combined power", te.power ? `${te.power.used.toFixed(0)} of ${te.power.budget.toFixed(0)} Wh (both batteries), ${te.power.remaining.toFixed(0)} Wh remaining` : "budget or draw not entered"],
+      ]);
+      te.formulas.slice(-3).forEach((f) => w.p(`• ${f}`, { size: 8.2, color: MUTED, gap: 0.4 }));
+    }
   }
 
   // ---------- Safety ----------
@@ -388,7 +479,7 @@ export function buildReportPdf(input: ReportInput, mapImage?: string | null, mas
   w.h2("Scientific limitations and planning assumptions", ROSE);
   [
     "Routes are computed on orbital terrain models (CTX 20 m; HiRISE window routed at 4 m). Boulders, small scarps, sand and soil strength are not visible.",
-    `Slope classes (10/15/25 deg), the max walkable slope, alert thresholds (e.g. long walk >= ${SAFETY_THRESHOLDS.longDistanceCautionM / 1000} km) and route penalty shapes are PAWPRINT planning assumptions, not NASA safety limits.`,
+    `Slope classes (10/15/25°), the max walkable slope, alert thresholds (e.g. long walk ≥ ${SAFETY_THRESHOLDS.longDistanceCautionM / 1000} km) and route penalty shapes are PAWPRINT planning assumptions, not NASA safety limits.`,
     "Walking time uses Tobler's hiking function, fitted to Earth hikers; it is not validated for suited astronauts in Mars gravity.",
     "Sample positions are estimated from rover localizations near the sealing sol; NASA's table does not publish coordinates.",
     "Weather values come from NASA's archived MEDA feed (last sol 1133, April 2024); there is no live or forecast weather.",
@@ -400,10 +491,10 @@ export function buildReportPdf(input: ReportInput, mapImage?: string | null, mas
   const n = doc.getNumberOfPages();
   for (let i = 1; i <= n; i++) {
     doc.setPage(i);
-    doc.setFont("helvetica", "normal");
+    doc.setFont(font, "normal");
     doc.setFontSize(7.5);
     doc.setTextColor(...MUTED);
-    doc.text(pdfText(`PAWPRINT MARS · generated ${now.toISOString().slice(0, 16).replace("T", " ")} UTC · planning estimate, not certified for astronaut safety`), w.M, w.H - 8);
+    doc.text(safe(`PAWPRINT MARS · generated ${now.toISOString().slice(0, 16).replace("T", " ")} UTC · planning estimate, not certified for astronaut safety`), w.M, w.H - 8);
     doc.text(`Page ${i} of ${n}`, w.W - w.M, w.H - 8, { align: "right" });
   }
   return doc;
@@ -437,6 +528,10 @@ export async function renderMapSnapshot(input: ReportInput, W = 1400, H = 900): 
   if (input.mode === "team" && input.team) {
     const col = { A: "#76C9C2", B: "#A99BDD" } as const;
     (["A", "B"] as const).forEach((w) => input.team!.routes[w] && lines.push({ pts: input.team!.routes[w]!.path_lonlat, color: col[w], width: 5 }));
+    (["A", "B"] as const).forEach((w) => {
+      const r = input.team!.routes[`${w}ret`];
+      if (r) lines.push({ pts: r.path_lonlat, color: col[w], width: 3, dash: [8, 8] });
+    });
     const lab: Record<TeamSlot, [string, string]> = { aStart: ["A start", col.A], aDest: ["A dest.", col.A], bStart: ["B start", col.B], bDest: ["B dest.", col.B], meet: ["Rendezvous", "#D98EBA"] };
     (Object.keys(lab) as TeamSlot[]).forEach((k) => input.team!.stops[k] && pins.push({ at: [input.team!.stops[k]!.lon, input.team!.stops[k]!.lat], color: lab[k][1], label: lab[k][0] }));
   }
@@ -518,24 +613,38 @@ export async function renderMapSnapshot(input: ReportInput, W = 1400, H = 900): 
       g.fillText("!", x, y + 5);
     }),
   );
-  // pins + labels
+  // pins, then labels placed so they never overlap each other, the pins or the map furniture
   g.textAlign = "left";
-  for (const p of pins) {
-    const x = X(p.at[0]);
-    const y = Y(p.at[1]);
+  const screenPins = pins.map((p) => ({ x: X(p.at[0]), y: Y(p.at[1]), label: p.label, color: p.color }));
+  for (const p of screenPins) {
     g.fillStyle = p.color;
     g.strokeStyle = "#F1EDF5";
     g.lineWidth = 3;
     g.beginPath();
-    g.arc(x, y, 9, 0, Math.PI * 2);
+    g.arc(p.x, p.y, 9, 0, Math.PI * 2);
     g.fill();
     g.stroke();
-    g.font = "600 20px sans-serif";
-    const tw = g.measureText(p.label).width;
+  }
+  g.font = "600 20px sans-serif";
+  const reserved: Rect[] = [
+    { x: 14, y: 14, w: 52, h: 64 }, // north arrow
+    { x: W - 280, y: H - 70, w: 280, h: 70 }, // scale bar
+    { x: 0, y: H - 30, w: 700, h: 30 }, // credits
+  ];
+  const { boxes } = placeLabels(screenPins, (t) => g.measureText(t).width, W, H, { h: 28, pinR: 11, reserved });
+  for (const b of boxes) {
+    if (b.leader) {
+      g.strokeStyle = "rgba(241,237,245,0.85)";
+      g.lineWidth = 2;
+      g.beginPath();
+      g.moveTo(b.ax, b.ay);
+      g.lineTo(b.x + (b.x > b.ax ? 0 : b.w), b.y + b.h / 2);
+      g.stroke();
+    }
     g.fillStyle = "rgba(34,36,56,0.92)";
-    g.fillRect(x + 14, y - 15, tw + 14, 28);
+    g.fillRect(b.x, b.y, b.w, b.h);
     g.fillStyle = "#F1EDF5";
-    g.fillText(p.label, x + 21, y + 6);
+    g.fillText(b.text, b.x + 8, b.y + b.h / 2 + 7);
   }
   // scale bar (true ground distance at the centre latitude)
   const mPerPx = metersPerDegLon(cy) / k;
@@ -576,12 +685,38 @@ export async function renderMapSnapshot(input: ReportInput, W = 1400, H = 900): 
   return c.toDataURL("image/jpeg", 0.88);
 }
 
+async function fetchBase64(url: string): Promise<string> {
+  const buf = new Uint8Array(await (await fetch(url)).arrayBuffer());
+  let bin = "";
+  for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+export async function loadReportFonts(): Promise<ReportFonts | null> {
+  try {
+    const [regular, bold] = await Promise.all([fetchBase64(interRegularUrl), fetchBase64(interBoldUrl)]);
+    return { regular, bold };
+  } catch {
+    return null; // falls back to Helvetica with Latin-1 substitutions
+  }
+}
+
 export async function exportMissionReport(input: ReportInput): Promise<{ pages: number }> {
-  const [map, mascot] = await Promise.all([renderMapSnapshot(input).catch(() => null), loadImage("/mascot/dog-standing-wave.jpg").catch(() => null)]);
-  const doc = buildReportPdf(input, map, mascot);
+  const [map, mascot, fonts] = await Promise.all([
+    renderMapSnapshot(input).catch(() => null),
+    loadImage("/mascot/dog-standing-wave.jpg").catch(() => null),
+    loadReportFonts(),
+  ]);
+  const doc = buildReportPdf(input, map, mascot, fonts);
   const slug = (input.name || "marswalk").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   doc.save(`${slug || "marswalk"}-mission-report.pdf`);
   const pages = doc.getNumberOfPages();
-  (window as unknown as { __pawprintLastReport?: unknown }).__pawprintLastReport = { pages, mapIncluded: !!map, bytes: doc.output("arraybuffer").byteLength };
+  (window as unknown as { __pawprintLastReport?: unknown }).__pawprintLastReport = {
+    pages,
+    mapIncluded: !!map,
+    font: (doc as unknown as { reportFont: string }).reportFont,
+    bytes: doc.output("arraybuffer").byteLength,
+    text: (doc as unknown as { textLog: string[] }).textLog.join("\n"),
+  };
   return { pages };
 }

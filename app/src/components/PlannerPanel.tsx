@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { OBJECTIVE_META } from "../lib/compare";
-import type { EvaPlan } from "../lib/eva";
+import type { EvaPlan, TeamEva } from "../lib/eva";
 import { formatDistance, formatDuration, formatLat, formatLon } from "../lib/mars";
 import { countSteepSegments, profileSlopes, riskLevel, samplesNearRoute } from "../lib/routeAnalysis";
 import type { Alert } from "../lib/safety";
@@ -73,6 +73,7 @@ interface Props {
   eva: EvaSettings;
   setEva: (s: EvaSettings) => void;
   evaPlan: EvaPlan | null;
+  teamEva: TeamEva | null;
   team: TeamProps;
 }
 
@@ -355,10 +356,7 @@ export function PlannerPanel(p: Props) {
           (solo ? (
             <EvaPanel plan={p.evaPlan} settings={p.eva} setSettings={p.setEva} scienceStops={Math.max(0, p.stops.length - 1)} />
           ) : (
-            <>
-              <DogTip pose="sitting" compact title="Team EVA">In Two-Astronaut mode, the science time below is used at each astronaut's destination. Oxygen and power budgets apply to Solo plans in this prototype.</DogTip>
-              <EvaPanel plan={null} settings={p.eva} setSettings={p.setEva} scienceStops={2} />
-            </>
+            <EvaPanel plan={null} team={p.teamEva} teamMode settings={p.eva} setSettings={p.setEva} scienceStops={1} />
           ))}
 
         {p.tab === "notes" && (

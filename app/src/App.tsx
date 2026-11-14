@@ -11,7 +11,7 @@ import { ScienceView } from "./components/ScienceView";
 import { Hint, Icon, KindBadge, Mascot, Term } from "./components/ui";
 import { apiHealth, compareRoutes, loadStatic, planRoute, probeTerrain, type TerrainProbe } from "./lib/api";
 import { OBJECTIVE_META, OBJECTIVE_ORDER } from "./lib/compare";
-import { DEFAULT_EVA, evaPlan as computeEva } from "./lib/eva";
+import { DEFAULT_EVA, evaPlan as computeEva, teamEvaPlan } from "./lib/eva";
 import { noRouteAlert, routeAlerts, sortAlerts, steepStretches, type Alert } from "./lib/safety";
 import { teamAlerts, teamSummary } from "./lib/team";
 import { formatLat, formatLon, parseLatLon } from "./lib/mars";
@@ -64,7 +64,7 @@ export default function App() {
   const [exporting, setExporting] = useState(false);
   const [teamStops, setTeamStops] = useState<Partial<Record<TeamSlot, Stop>>>({});
   const [teamPlace, setTeamPlace] = useState<TeamSlot | null>(null);
-  const [teamRoutes, setTeamRoutes] = useState<{ A?: RouteResult; B?: RouteResult }>({});
+  const [teamRoutes, setTeamRoutes] = useState<{ A?: RouteResult; B?: RouteResult; Aret?: RouteResult; Bret?: RouteResult }>({});
   const [teamErrors, setTeamErrors] = useState<{ A?: string; B?: string }>({});
   const [teamBusy, setTeamBusy] = useState(false);
   const [routeError, setRouteError] = useState<string | null>(null);
@@ -152,15 +152,19 @@ export default function App() {
     setTeamBusy(true);
     setTeamErrors({});
     const pts = (a: Stop, b: Stop, c: Stop): LonLat[] => [a, b, c].map((x) => [x.lon, x.lat]);
-    const [ra, rb] = await Promise.allSettled([
+    // Outbound legs (start -> destination -> rendezvous) and each astronaut's walk back to their own start.
+    const [ra, rb, raRet, rbRet] = await Promise.allSettled([
       planRoute(pts(t.aStart, t.aDest, t.meet), maxSlope, objective),
       planRoute(pts(t.bStart, t.bDest, t.meet), maxSlope, objective),
+      planRoute([t.meet, t.aStart].map((x) => [x.lon, x.lat] as LonLat), maxSlope, objective),
+      planRoute([t.meet, t.bStart].map((x) => [x.lon, x.lat] as LonLat), maxSlope, objective),
     ]);
     if (seq !== teamSeq.current) return;
     const msg = (r: PromiseSettledResult<RouteResult>) => (r.status === "rejected" ? (r.reason instanceof Error ? r.reason.message : String(r.reason)) : undefined);
     if ([msg(ra), msg(rb)].some((m) => m && (m.includes("Failed to fetch") || m.includes("HTTP 50")))) setApiUp(false);
     else setApiUp(true);
-    setTeamRoutes({ A: ra.status === "fulfilled" ? ra.value : undefined, B: rb.status === "fulfilled" ? rb.value : undefined });
+    const ok = (r: PromiseSettledResult<RouteResult>) => (r.status === "fulfilled" ? r.value : undefined);
+    setTeamRoutes({ A: ok(ra), B: ok(rb), Aret: ok(raRet), Bret: ok(rbRet) });
     setTeamErrors({ A: msg(ra), B: msg(rb) });
     setTeamBusy(false);
   };
@@ -288,6 +292,18 @@ export default function App() {
     () => (teamRoutes.A && teamRoutes.B ? teamSummary(teamRoutes.A, teamRoutes.B, eva.scienceMinPerStop, eva.paceFactor) : null),
     [teamRoutes, eva.scienceMinPerStop, eva.paceFactor],
   );
+  const teamEva = useMemo(
+    () =>
+      teamSum
+        ? teamEvaPlan(
+            { arriveMeetMinA: teamSum.a.arriveMeetMin, arriveMeetMinB: teamSum.b.arriveMeetMin, meetMin: teamSum.meetMin, scienceMin: eva.scienceMinPerStop },
+            teamRoutes.Aret ?? null,
+            teamRoutes.Bret ?? null,
+            eva,
+          )
+        : null,
+    [teamSum, teamRoutes, eva],
+  );
   const weatherSols = useMemo(() => data?.weather ?? [], [data]);
   const alerts: Alert[] = useMemo(() => {
     if (mode === "solo") {
@@ -304,8 +320,8 @@ export default function App() {
         out.push(a.id === "weather" || a.id === "resolution" ? a : { ...a, id: `${w}-${a.id}`, title: `Astronaut ${w}: ${a.title}` });
       });
     });
-    return sortAlerts([...teamAlerts(teamErrors.A ?? null, teamErrors.B ?? null, teamSum, maxSlope), ...out]);
-  }, [mode, routeError, route, maxSlope, weatherSols, evaP, teamRoutes, teamErrors, teamSum]);
+    return sortAlerts([...teamAlerts(teamErrors.A ?? null, teamErrors.B ?? null, teamSum, maxSlope), ...out, ...(teamEva?.alerts ?? [])]);
+  }, [mode, routeError, route, maxSlope, weatherSols, evaP, teamRoutes, teamErrors, teamSum, teamEva]);
 
   const steepMarkers = useMemo(() => {
     const list: { key: string; at: LonLat; title: string; why: string }[] = [];
@@ -342,7 +358,7 @@ export default function App() {
         alerts,
         eva,
         evaPlan: evaP,
-        team: mode === "team" ? { stops: teamStops, routes: teamRoutes, summary: teamSum, errors: teamErrors } : null,
+        team: mode === "team" ? { stops: teamStops, routes: teamRoutes, summary: teamSum, errors: teamErrors, eva: teamEva } : null,
         manifest: data.manifest,
         weather: data.weather,
         pois: data.pois,
@@ -594,7 +610,10 @@ export default function App() {
                   onTeamSlot={(p, slot) => setTeamStop(slot, p.lon, p.lat, p.name, p.id)}
                   teamRoutes={
                     view === "planner" && mode === "team"
-                      ? (["A", "B"] as const).flatMap((w) => (teamRoutes[w] ? [{ key: w, label: `Astronaut ${w} route`, route: teamRoutes[w]!, color: TEAM_COLORS[w] }] : []))
+                      ? (["A", "B"] as const).flatMap((w) => [
+                          ...(teamRoutes[w] ? [{ key: w, label: `Astronaut ${w} route`, route: teamRoutes[w]!, color: TEAM_COLORS[w] }] : []),
+                          ...(teamRoutes[`${w}ret`] ? [{ key: `${w}ret`, label: `Astronaut ${w} walk back to start`, route: teamRoutes[`${w}ret`]!, color: TEAM_COLORS[w], dash: "4 7" }] : []),
+                        ])
                       : []
                   }
                   teamPins={
@@ -652,6 +671,7 @@ export default function App() {
                 eva={eva}
                 setEva={setEva}
                 evaPlan={evaP}
+                teamEva={teamEva}
                 team={{
                   stops: teamStops,
                   place: teamPlace,

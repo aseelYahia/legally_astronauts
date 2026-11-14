@@ -41,7 +41,7 @@ interface Props {
   /** Safety alert markers (steep stretches) */
   alertMarkers?: { key: string; at: LonLat; title: string; why: string }[];
   /** Two-astronaut mode */
-  teamRoutes?: { key: string; label: string; route: RouteResult; color: string }[];
+  teamRoutes?: { key: string; label: string; route: RouteResult; color: string; dash?: string }[];
   teamPins?: { key: string; at: LonLat; label: string; who: "A" | "B" | "meet" }[];
   teamMode?: boolean;
   onTeamSlot?: (poi: Poi, slot: TeamSlot) => void;
@@ -268,7 +268,7 @@ export function MapView(props: Props) {
           {props.teamRoutes?.map((t) => (
             <Fragment key={t.key}>
               <Polyline positions={ll(t.route)} pathOptions={{ color: "#131522", weight: 7, opacity: 0.35, interactive: false }} />
-              <Polyline positions={ll(t.route)} pathOptions={{ color: t.color, weight: 3.5, opacity: 1 }}>
+              <Polyline positions={ll(t.route)} pathOptions={{ color: t.color, weight: t.dash ? 2.5 : 3.5, opacity: t.dash ? 0.9 : 1, dashArray: t.dash }}>
                 <Tooltip sticky className="map-tip">{t.label}</Tooltip>
               </Polyline>
             </Fragment>
