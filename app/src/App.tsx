@@ -3,15 +3,20 @@ import { ExplorePanel } from "./components/ExplorePanel";
 import { LayersPanel } from "./components/LayersPanel";
 import { MapView, type LayerKey, type PlaceMode } from "./components/MapView";
 import { Onboarding } from "./components/Onboarding";
-import { PlannerPanel, type PlanStep } from "./components/PlannerPanel";
+import { PlannerPanel, type PlanStep, type PlannerTab } from "./components/PlannerPanel";
+import { TEAM_COLORS, TEAM_SLOTS } from "./components/planner/TeamPlanner";
 import { QuickGuide, type GuideStep } from "./components/QuickGuide";
 import { SavedRoutes } from "./components/SavedRoutes";
 import { ScienceView } from "./components/ScienceView";
 import { Hint, Icon, KindBadge, Mascot, Term } from "./components/ui";
-import { apiHealth, loadStatic, planRoute, probeTerrain, type TerrainProbe } from "./lib/api";
+import { apiHealth, compareRoutes, loadStatic, planRoute, probeTerrain, type TerrainProbe } from "./lib/api";
+import { OBJECTIVE_META, OBJECTIVE_ORDER } from "./lib/compare";
+import { DEFAULT_EVA, evaPlan as computeEva } from "./lib/eva";
+import { noRouteAlert, routeAlerts, sortAlerts, steepStretches, type Alert } from "./lib/safety";
+import { teamAlerts, teamSummary } from "./lib/team";
 import { formatLat, formatLon, parseLatLon } from "./lib/mars";
 import { deleteRoute, flag, loadRoutes, saveRoute } from "./lib/storage";
-import type { LonLat, Manifest, Poi, RouteResult, SavedRoute, Stop, StopRole, WeatherSol } from "./types";
+import type { CompareResult, EvaSettings, LonLat, Manifest, MissionMode, Objective, Poi, RouteResult, SavedRoute, Stop, StopRole, TeamSlot, WeatherSol } from "./types";
 
 type View = "explore" | "planner" | "science";
 type Left = "layers" | "saved" | null;
@@ -49,7 +54,19 @@ export default function App() {
   const [stops, setStops] = useState<Stop[]>([]);
   const [placeMode, setPlaceMode] = useState<PlaceMode>(null);
   const [maxSlope, setMaxSlope] = useState(25);
-  const [route, setRoute] = useState<RouteResult | null>(null);
+  const [compare, setCompare] = useState<CompareResult | null>(null);
+  const [objective, setObjective] = useState<Objective>("lower_risk");
+  const route: RouteResult | null = compare ? compare.routes[objective] : null;
+  const [mode, setMode] = useState<MissionMode>("solo");
+  const [plannerTab, setPlannerTab] = useState<PlannerTab>("route");
+  const [missionId, setMissionId] = useState<string | null>(null);
+  const [eva, setEva] = useState<EvaSettings>(DEFAULT_EVA);
+  const [exporting, setExporting] = useState(false);
+  const [teamStops, setTeamStops] = useState<Partial<Record<TeamSlot, Stop>>>({});
+  const [teamPlace, setTeamPlace] = useState<TeamSlot | null>(null);
+  const [teamRoutes, setTeamRoutes] = useState<{ A?: RouteResult; B?: RouteResult }>({});
+  const [teamErrors, setTeamErrors] = useState<{ A?: string; B?: string }>({});
+  const [teamBusy, setTeamBusy] = useState(false);
   const [routeError, setRouteError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [apiUp, setApiUp] = useState(true);
@@ -94,12 +111,12 @@ export default function App() {
     setBusy(true);
     setRouteError(null);
     try {
-      const r = await planRoute(pts, maxSlope);
-      if (seq === reqSeq.current) setRoute(r);
+      const c = await compareRoutes(pts, maxSlope);
+      if (seq === reqSeq.current) setCompare(c);
       setApiUp(true);
     } catch (e) {
       if (seq !== reqSeq.current) return;
-      setRoute(null);
+      setCompare(null);
       const msg = e instanceof Error ? e.message : String(e);
       if (msg.includes("Failed to fetch") || msg.includes("HTTP 50")) {
         setApiUp(false);
@@ -114,10 +131,43 @@ export default function App() {
   // Any itinerary change makes the old route stale: clear it (and cancel any in-flight request).
   useEffect(() => {
     reqSeq.current++;
-    setRoute(null);
+    setCompare(null);
     setRouteError(null);
     setBusy(false);
   }, [stops, maxSlope]);
+
+  // ---------------- Two-astronaut mode ----------------
+  const teamSeq = useRef(0);
+  useEffect(() => {
+    teamSeq.current++;
+    setTeamRoutes({});
+    setTeamErrors({});
+    setTeamBusy(false);
+  }, [teamStops, maxSlope, objective]);
+  const teamReady = TEAM_SLOTS.every((t) => teamStops[t.slot]);
+  const planTeam = async () => {
+    const t = teamStops;
+    if (!t.aStart || !t.aDest || !t.bStart || !t.bDest || !t.meet) return;
+    const seq = ++teamSeq.current;
+    setTeamBusy(true);
+    setTeamErrors({});
+    const pts = (a: Stop, b: Stop, c: Stop): LonLat[] => [a, b, c].map((x) => [x.lon, x.lat]);
+    const [ra, rb] = await Promise.allSettled([
+      planRoute(pts(t.aStart, t.aDest, t.meet), maxSlope, objective),
+      planRoute(pts(t.bStart, t.bDest, t.meet), maxSlope, objective),
+    ]);
+    if (seq !== teamSeq.current) return;
+    const msg = (r: PromiseSettledResult<RouteResult>) => (r.status === "rejected" ? (r.reason instanceof Error ? r.reason.message : String(r.reason)) : undefined);
+    if ([msg(ra), msg(rb)].some((m) => m && (m.includes("Failed to fetch") || m.includes("HTTP 50")))) setApiUp(false);
+    else setApiUp(true);
+    setTeamRoutes({ A: ra.status === "fulfilled" ? ra.value : undefined, B: rb.status === "fulfilled" ? rb.value : undefined });
+    setTeamErrors({ A: msg(ra), B: msg(rb) });
+    setTeamBusy(false);
+  };
+  const setTeamStop = (slot: TeamSlot, lon: number, lat: number, name?: string, poiId?: string) => {
+    const label = TEAM_SLOTS.find((t) => t.slot === slot)!.label;
+    setTeamStops((prev) => ({ ...prev, [slot]: { id: newId(), role: slot === "aStart" || slot === "bStart" ? "start" : "destination", lon, lat, poiId, name: name ?? label } }));
+  };
 
   // Programmatic re-plan (used after loading a saved route).
   useEffect(() => {
@@ -125,8 +175,8 @@ export default function App() {
   }, [planRequest]);
 
   useEffect(() => {
-    if (route && isMobile) setSheetOpen(true);
-  }, [route, isMobile]);
+    if (compare && isMobile) setSheetOpen(true);
+  }, [compare, isMobile]);
 
   const addStop = useCallback((role: StopRole, lon: number, lat: number, name?: string, poiId?: string) => {
     setStops((prev) => {
@@ -146,6 +196,11 @@ export default function App() {
 
   const onMapClick = useCallback(
     (lon: number, lat: number) => {
+      if (view === "planner" && mode === "team" && teamPlace) {
+        setTeamStop(teamPlace, lon, lat);
+        setTeamPlace(null);
+        return;
+      }
       if (placeMode) {
         addStop(placeMode, lon, lat);
         setPlaceMode(null);
@@ -163,7 +218,8 @@ export default function App() {
           .finally(() => setProbeBusy(false));
       }
     },
-    [placeMode, addStop, view, isMobile],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [placeMode, addStop, view, isMobile, mode, teamPlace],
   );
 
   const onPoiAction = useCallback(
@@ -180,7 +236,7 @@ export default function App() {
 
   const fly = (lon: number, lat: number, zoom?: number) => setFlyTarget({ lon, lat, zoom, key: Date.now() });
 
-  const sig = JSON.stringify({ stops, maxSlope, routeName, notes });
+  const sig = JSON.stringify({ stops, maxSlope, routeName, notes, objective, missionId, eva });
   const save = () => {
     const r: SavedRoute = {
       id: routeId,
@@ -190,6 +246,9 @@ export default function App() {
       maxSlopeDeg: maxSlope,
       notes,
       summary: route ? { distance_m: route.distance_m, elevation_gain_m: route.elevation_gain_m, max_slope_deg: route.max_slope_deg, grid: route.grid.name } : undefined,
+      objective,
+      scienceMission: missionId,
+      eva,
     };
     setSaved(saveRoute(r));
     setSavedSig(sig);
@@ -203,9 +262,16 @@ export default function App() {
     setStops(r.stops);
     setMaxSlope(r.maxSlopeDeg);
     setNotes(r.notes);
+    const obj = r.objective ?? "lower_risk";
+    const ms = r.scienceMission ?? null;
+    const ev = r.eva ?? DEFAULT_EVA;
+    setObjective(obj);
+    setMissionId(ms);
+    setEva(ev);
+    setMode("solo");
     setView("planner");
     if (isNarrow) setLeft(null);
-    setSavedSig(JSON.stringify({ stops: r.stops, maxSlope: r.maxSlopeDeg, routeName: r.name, notes: r.notes }));
+    setSavedSig(JSON.stringify({ stops: r.stops, maxSlope: r.maxSlopeDeg, routeName: r.name, notes: r.notes, objective: obj, missionId: ms, eva: ev }));
     setPlanRequest((n) => n + 1);
     const d = r.stops.find((s) => s.role === "destination") ?? r.stops[0];
     if (d) fly(d.lon, d.lat, 13.5);
@@ -215,6 +281,79 @@ export default function App() {
   const hasDest = stops.some((s) => s.role === "destination");
   const step: PlanStep = !hasStart ? 1 : !hasDest ? 2 : !route ? 3 : sig === savedSig ? 5 : 4;
   const guideStep: GuideStep = view === "planner" ? (step >= 3 ? 3 : 2) : 1;
+
+  // ---------------- EVA, team summary and safety alerts ----------------
+  const evaP = useMemo(() => (route ? computeEva(route, Math.max(0, stops.length - 1), eva) : null), [route, stops.length, eva]);
+  const teamSum = useMemo(
+    () => (teamRoutes.A && teamRoutes.B ? teamSummary(teamRoutes.A, teamRoutes.B, eva.scienceMinPerStop, eva.paceFactor) : null),
+    [teamRoutes, eva.scienceMinPerStop, eva.paceFactor],
+  );
+  const weatherSols = useMemo(() => data?.weather ?? [], [data]);
+  const alerts: Alert[] = useMemo(() => {
+    if (mode === "solo") {
+      if (routeError) return [noRouteAlert(routeError, maxSlope)];
+      if (!route) return [];
+      return sortAlerts([...routeAlerts(route, maxSlope, weatherSols), ...(evaP?.alerts ?? [])]);
+    }
+    const out: Alert[] = [];
+    (["A", "B"] as const).forEach((w, i) => {
+      const r = teamRoutes[w];
+      if (!r) return;
+      routeAlerts(r, maxSlope, weatherSols).forEach((a) => {
+        if ((a.id === "weather" || a.id === "resolution") && i > 0 && teamRoutes.A) return;
+        out.push(a.id === "weather" || a.id === "resolution" ? a : { ...a, id: `${w}-${a.id}`, title: `Astronaut ${w}: ${a.title}` });
+      });
+    });
+    return sortAlerts([...teamAlerts(teamErrors.A ?? null, teamErrors.B ?? null, teamSum, maxSlope), ...out]);
+  }, [mode, routeError, route, maxSlope, weatherSols, evaP, teamRoutes, teamErrors, teamSum]);
+
+  const steepMarkers = useMemo(() => {
+    const list: { key: string; at: LonLat; title: string; why: string }[] = [];
+    const add = (r: RouteResult, prefix: string) =>
+      steepStretches(r, 15).forEach((st, i) =>
+        list.push({
+          key: `${prefix}${i}`,
+          at: st.at,
+          title: `${prefix ? `Astronaut ${prefix}: ` : ""}steep ground ${st.maxSlope.toFixed(1)}°`,
+          why: `≥15° (hazard class) over about ${Math.max(Math.round(st.length_m), r.grid.resolution_m)} m. Horn slope on the ${r.grid.name.toUpperCase()} ${r.grid.resolution_m} m terrain grid.`,
+        }),
+      );
+    if (view !== "planner") return list;
+    if (mode === "solo" && route) add(route, "");
+    if (mode === "team") (["A", "B"] as const).forEach((w) => teamRoutes[w] && add(teamRoutes[w]!, w));
+    return list;
+  }, [view, mode, route, teamRoutes]);
+
+  const runExport = async () => {
+    if (!data) return;
+    setExporting(true);
+    try {
+      // jsPDF is large: load the report module only when a report is requested.
+      const { exportMissionReport } = await import("./lib/report");
+      await exportMissionReport({
+        name: routeName,
+        notes,
+        mode,
+        objective,
+        compare,
+        route,
+        stops,
+        missionId,
+        alerts,
+        eva,
+        evaPlan: evaP,
+        team: mode === "team" ? { stops: teamStops, routes: teamRoutes, summary: teamSum, errors: teamErrors } : null,
+        manifest: data.manifest,
+        weather: data.weather,
+        pois: data.pois,
+        maxSlope,
+      });
+    } catch (e) {
+      window.alert(`Could not create the report: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setExporting(false);
+    }
+  };
 
   // ---------------- Search ----------------
   const searchResults = useMemo(() => {
@@ -268,9 +407,18 @@ export default function App() {
   const latestWx = [...weather].reverse().find((s) => s.min_temp_c !== null);
   const coord = cursor ?? [(manifest.aoi.lon_min + manifest.aoi.lon_max) / 2, (manifest.aoi.lat_min + manifest.aoi.lat_max) / 2];
 
+  const teamLabel = teamPlace ? TEAM_SLOTS.find((t) => t.slot === teamPlace)!.label : null;
   const hint =
     view === "explore"
       ? "Click anywhere to inspect the ground · hover a marker to see what it is"
+      : mode === "team"
+        ? teamLabel
+          ? `Click the map to place ${teamLabel}, or open a sample marker`
+          : teamReady
+            ? teamSum
+              ? "Turquoise = Astronaut A · lavender = Astronaut B · rose pin = rendezvous"
+              : "All points set: press Plan Both in the planner panel"
+            : "Place both starts, both destinations and the rendezvous"
       : step === 1
         ? "Press + Start, then click the map, or click a marker and choose Set as start"
         : step === 2
@@ -279,7 +427,7 @@ export default function App() {
             ? busy
               ? "Planning over real terrain…"
               : "Ready: press Plan Route in the planner panel"
-            : "Hover the elevation profile to see that point on the route";
+            : `${OBJECTIVE_META[objective].label} route shown solid; the other options are dashed · ⚠ marks steep ground`;
 
   const statusLabel = view === "explore" ? "Exploring" : view === "science" ? "Reviewing data" : route ? "Route ready" : "Planning";
   const showLeft = view !== "science" && left !== null;
@@ -433,10 +581,33 @@ export default function App() {
                   rover={rover}
                   layers={layers}
                   opacity={opacity}
-                  stops={view === "planner" ? stops : []}
-                  route={view === "planner" ? route : null}
+                  stops={view === "planner" && mode === "solo" ? stops : []}
+                  route={view === "planner" && mode === "solo" ? route : null}
+                  routeColor={OBJECTIVE_META[objective].color}
+                  altRoutes={
+                    view === "planner" && mode === "solo" && compare
+                      ? OBJECTIVE_ORDER.filter((o) => o !== objective).map((o) => ({ key: o, label: OBJECTIVE_META[o].label, route: compare.routes[o], color: OBJECTIVE_META[o].color, dash: OBJECTIVE_META[o].dash }))
+                      : []
+                  }
+                  alertMarkers={steepMarkers}
+                  teamMode={mode === "team"}
+                  onTeamSlot={(p, slot) => setTeamStop(slot, p.lon, p.lat, p.name, p.id)}
+                  teamRoutes={
+                    view === "planner" && mode === "team"
+                      ? (["A", "B"] as const).flatMap((w) => (teamRoutes[w] ? [{ key: w, label: `Astronaut ${w} route`, route: teamRoutes[w]!, color: TEAM_COLORS[w] }] : []))
+                      : []
+                  }
+                  teamPins={
+                    view === "planner" && mode === "team"
+                      ? TEAM_SLOTS.flatMap((t) => {
+                          const st = teamStops[t.slot];
+                          return st ? [{ key: t.slot, at: [st.lon, st.lat] as LonLat, label: t.who === "meet" ? "Rendezvous" : `${t.label}`, who: t.who }] : [];
+                        })
+                      : []
+                  }
                   hoverIndex={hoverIndex}
-                  placeMode={view === "planner" ? placeMode : null}
+                  placeMode={view === "planner" ? (mode === "team" ? (teamPlace ? "waypoint" : null) : placeMode) : null}
+                  placeLabel={mode === "team" && teamLabel ? teamLabel : undefined}
                   flyTarget={flyTarget}
                   onMapClick={onMapClick}
                   onCursor={setCursor}
@@ -463,6 +634,36 @@ export default function App() {
 
             {view === "planner" ? (
               <PlannerPanel
+                mode={mode}
+                setMode={(m) => { setMode(m); setPlaceMode(null); setTeamPlace(null); }}
+                compare={compare}
+                objective={objective}
+                setObjective={setObjective}
+                onExport={() => void runExport()}
+                exporting={exporting}
+                tab={plannerTab}
+                setTab={setPlannerTab}
+                alerts={alerts}
+                onLocateAlert={(a) => a.at && fly(a.at[0], a.at[1], 16)}
+                weather={weather}
+                missionId={missionId}
+                setMissionId={setMissionId}
+                onAddScience={(p, role) => { onPoiAction(p, role); fly(p.lon, p.lat); }}
+                eva={eva}
+                setEva={setEva}
+                evaPlan={evaP}
+                team={{
+                  stops: teamStops,
+                  place: teamPlace,
+                  setPlace: (sl) => { setTeamPlace(sl); if (sl && isMobile) setSheetOpen(false); },
+                  clear: (sl) => setTeamStops((prev) => { const n = { ...prev }; delete n[sl]; return n; }),
+                  routes: teamRoutes,
+                  errors: teamErrors,
+                  summary: teamSum,
+                  busy: teamBusy,
+                  ready: teamReady,
+                  onPlan: () => void planTeam(),
+                }}
                 name={routeName}
                 setName={setRouteName}
                 stops={stops}

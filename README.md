@@ -22,6 +22,22 @@ npm run dev                                                # http://127.0.0.1:51
 
 Tests: `cd analysis && .venv/Scripts/python -m pytest` and `cd app && npm test`.
 
+## Features
+
+- **Explore**: real CTX/HiRISE terrain, elevation, steep-ground shading, rover tracks, NASA sample sites, terrain probe.
+- **Mission Planner** (A* over the USGS DTMs):
+  - **Compare Routes**: Fastest / Shortest / Lower Risk, each a genuinely different optimisation, shown together on the map.
+  - **Science Mission Selector**: suggests NASA sample sites for a chosen goal (ancient water, sedimentary, igneous, history).
+  - **Safety Alerts**: severity-ranked, each explaining which calculation or dataset triggered it, with ⚠ map markers.
+  - **Two-Astronaut mode**: separate routes to a shared rendezvous, with an estimated arrival timeline.
+  - **EVA Resources**: walk-out / science / walk-back time, turn-back time and user-entered oxygen and power budgets
+    (hypothetical planning arithmetic only).
+  - **Mission Report**: PDF with map, statistics, alerts, science notes, sources and limitations.
+- **Science Data**: every dataset, DOI, resolution, date and validation check.
+
+API: `POST /api/route` (optional `objective`), `POST /api/compare`, `GET /api/terrain`, `GET /api/health`.
+Routes are planning estimates from orbital data, **not certified safe for astronauts**. See `PROJECT_EXPLAINED.md`.
+
 ## Data (prototype area: 18.42–18.51° N, 77.34–77.47° E)
 
 | Layer | Source | Resolution | Kind |

@@ -38,6 +38,34 @@ def hazard_multiplier(slope_deg: float) -> float:
     return 1.0 + ((slope_deg - SLOPE_CLASSES_DEG[0]) / 10.0) ** 2
 
 
+# --- Route objectives ----------------------------------------------------------
+# "balanced" is the original PAWPRINT cost (Tobler time x mild slope penalty) and
+# stays the API default. The Compare Routes feature uses three genuinely
+# different objectives:
+#   fastest    : minimise Tobler walking time (no slope penalty)
+#   shortest   : minimise 3-D walking distance
+#   lower_risk : minimise Tobler time x a STRONG penalty that starts at 5 deg
+# All are PAWPRINT planning models (ESTIMATES), not NASA EVA rules.
+OBJECTIVES = ("balanced", "fastest", "shortest", "lower_risk")
+RISK_FLAT_DEG = 5.0
+
+
+def risk_multiplier(slope_deg: float) -> float:
+    """Lower-risk penalty: 1 below 5 deg, then 1 + ((s - 5) / 5)^2 (10 deg -> 2, 15 -> 5, 20 -> 10, 25 -> 17)."""
+    if slope_deg < RISK_FLAT_DEG:
+        return 1.0
+    return 1.0 + ((slope_deg - RISK_FLAT_DEG) / 5.0) ** 2
+
+
+def objective_multipliers(slope: np.ndarray, objective: str) -> np.ndarray:
+    """Per-cell cost multiplier for a time-based objective."""
+    if objective == "balanced":
+        return np.where(slope < SLOPE_CLASSES_DEG[0], 1.0, 1.0 + ((slope - SLOPE_CLASSES_DEG[0]) / 10.0) ** 2)
+    if objective == "lower_risk":
+        return np.where(slope < RISK_FLAT_DEG, 1.0, 1.0 + ((slope - RISK_FLAT_DEG) / 5.0) ** 2)
+    return np.ones_like(slope, dtype=float)
+
+
 @dataclass
 class TerrainGrid:
     """A DTM grid in GeoTIFF orientation (row 0 = north)."""
@@ -77,8 +105,16 @@ class TerrainGrid:
 _NEIGHBOURS = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
 
 
-def astar(grid: TerrainGrid, start: tuple[int, int], goal: tuple[int, int], max_slope_deg: float = DEFAULT_MAX_SLOPE_DEG):
-    """Return (list of (r, c) cells, total_cost_s) or (None, inf) if unreachable."""
+def astar(grid: TerrainGrid, start: tuple[int, int], goal: tuple[int, int], max_slope_deg: float = DEFAULT_MAX_SLOPE_DEG, objective: str = "balanced"):
+    """Return (list of (r, c) cells, total_cost) or (None, inf) if unreachable.
+
+    Cost units: seconds for time-based objectives, metres for "shortest".
+    Every objective uses an admissible heuristic (straight-line horizontal
+    distance, divided by Tobler's peak speed for time objectives), so A*
+    returns the optimal path for that objective."""
+    if objective not in OBJECTIVES:
+        raise ValueError(f"unknown objective {objective!r}")
+    time_based = objective != "shortest"
     rows, cols = grid.shape
     elev, slope, ok = grid.elevation, grid.slope, grid.passable
     allowed = ok & (slope <= max_slope_deg)
@@ -95,7 +131,7 @@ def astar(grid: TerrainGrid, start: tuple[int, int], goal: tuple[int, int], max_
     dx_rows = [float(v) for v in grid.dx_rows]
     dy = float(grid.dy)
     z = elev.ravel().tolist()
-    hm = np.where(slope < SLOPE_CLASSES_DEG[0], 1.0, 1.0 + ((slope - SLOPE_CLASSES_DEG[0]) / 10.0) ** 2).ravel().tolist()
+    hm = objective_multipliers(slope, objective).ravel().tolist()
     ok_flat = allowed.ravel().tolist()
     n = rows * cols
     g = [math.inf] * n
@@ -103,7 +139,7 @@ def astar(grid: TerrainGrid, start: tuple[int, int], goal: tuple[int, int], max_
     closed = bytearray(n)
     gr, gc = goal
     s_i, goal_i = start[0] * cols + start[1], gr * cols + gc
-    inv_vmax = 1.0 / TOBLER_VMAX_MS
+    inv_vmax = 1.0 / TOBLER_VMAX_MS if time_based else 1.0
     exp, sqrt, hypot = math.exp, math.sqrt, math.hypot
     # per-row horizontal step lengths for the 8 moves (dx averaged across the two rows)
     steps = []
@@ -139,8 +175,11 @@ def astar(grid: TerrainGrid, start: tuple[int, int], goal: tuple[int, int], max_
             if closed[nxt] or not ok_flat[nxt]:
                 continue
             grad = (z[nxt] - z0) / horiz
-            speed = 1.6666666666666667 * exp(-3.5 * abs(grad + 0.05))  # Tobler, m/s
-            ng = gcur + horiz * sqrt(1 + grad * grad) / speed * hm[nxt]
+            if time_based:
+                speed = 1.6666666666666667 * exp(-3.5 * abs(grad + 0.05))  # Tobler, m/s
+                ng = gcur + horiz * sqrt(1 + grad * grad) / speed * hm[nxt]
+            else:
+                ng = gcur + horiz * sqrt(1 + grad * grad)  # 3-D metres
             if ng < g[nxt]:
                 g[nxt] = ng
                 came[nxt] = cur
@@ -154,9 +193,12 @@ def path_metrics(grid: TerrainGrid, path: list[tuple[int, int]]) -> dict:
     elev = [float(grid.elevation[r, c]) for r, c in path]
     slopes = [float(grid.slope[r, c]) for r, c in path]
     cum = [0.0]
+    cum_walk = [0.0]
     horiz_total = 0.0
     gain = loss = 0.0
     time_s = 0.0
+    walk_s = 0.0
+    risk_s = 0.0
     class_dist = [0.0, 0.0, 0.0, 0.0]
     for i in range(1, len(path)):
         (r0, c0), (r1, c1) = path[i - 1], path[i]
@@ -170,7 +212,11 @@ def path_metrics(grid: TerrainGrid, path: list[tuple[int, int]]) -> dict:
         else:
             loss -= dz
         grad = dz / horiz if horiz else 0.0
-        time_s += seg / tobler_speed_ms(grad) * hazard_multiplier(slopes[i])
+        step_walk = seg / tobler_speed_ms(grad)
+        walk_s += step_walk
+        cum_walk.append(walk_s)
+        time_s += step_walk * hazard_multiplier(slopes[i])
+        risk_s += step_walk * risk_multiplier(slopes[i])
         k = int(np.digitize([slopes[i]], SLOPE_CLASSES_DEG)[0])
         class_dist[k] += seg
     total = cum[-1]
@@ -190,8 +236,10 @@ def path_metrics(grid: TerrainGrid, path: list[tuple[int, int]]) -> dict:
         "mean_slope_deg": mean_slope,
         "slope_class_fraction": {"easy": frac[0], "moderate": frac[1], "hazard": frac[2], "nogo": frac[3]},
         "est_time_s": time_s,
+        "walk_time_s": walk_s,
+        "objective_costs": {"fastest_s": walk_s, "shortest_m": total, "lower_risk_s": risk_s, "balanced_s": time_s},
         "difficulty": difficulty_label(total, gain, max_slope, frac),
-        "profile": {"distance_m": cum, "elevation_m": elev},
+        "profile": {"distance_m": cum, "elevation_m": elev, "slope_deg": slopes, "walk_time_s": cum_walk},
     }
 
 
@@ -204,7 +252,7 @@ def difficulty_label(distance_m: float, gain_m: float, max_slope: float, frac: l
     return {"score": round(score, 1), "label": label}
 
 
-def plan_route(grid: TerrainGrid, points_lonlat: list[tuple[float, float]], max_slope_deg: float = DEFAULT_MAX_SLOPE_DEG) -> dict:
+def plan_route(grid: TerrainGrid, points_lonlat: list[tuple[float, float]], max_slope_deg: float = DEFAULT_MAX_SLOPE_DEG, objective: str = "balanced") -> dict:
     """Plan through an ordered list of (lon, lat) stops. Raises ValueError on failure."""
     if len(points_lonlat) < 2:
         raise ValueError("need at least a start and a destination")
@@ -216,7 +264,7 @@ def plan_route(grid: TerrainGrid, points_lonlat: list[tuple[float, float]], max_
     full: list[tuple[int, int]] = []
     leg_index = [0]
     for a, b in zip(cells, cells[1:]):
-        leg, cost = astar(grid, a, b, max_slope_deg)
+        leg, cost = astar(grid, a, b, max_slope_deg, objective)
         if leg is None:
             raise ValueError(f"no route under {max_slope_deg:.0f} deg slope limit between stops")
         full.extend(leg if not full else leg[1:])
@@ -226,4 +274,28 @@ def plan_route(grid: TerrainGrid, points_lonlat: list[tuple[float, float]], max_
     m["stop_indices"] = leg_index
     m["grid"] = {"name": grid.name, "resolution_m": grid.resolution_m}
     m["max_slope_limit_deg"] = max_slope_deg
+    m["objective"] = objective
+    m["_cells"] = full
     return m
+
+
+COMPARE_OBJECTIVES = ("fastest", "shortest", "lower_risk")
+
+
+def compare_routes(grid: TerrainGrid, points_lonlat: list[tuple[float, float]], max_slope_deg: float = DEFAULT_MAX_SLOPE_DEG) -> dict:
+    """Plan the same itinerary under three objectives and report how similar they are.
+
+    similarity[a][b] = Jaccard overlap of the two routes' grid cells (1.0 = same cells).
+    identical[a][b] = True when the cell sequences are exactly equal."""
+    routes = {o: plan_route(grid, points_lonlat, max_slope_deg, o) for o in COMPARE_OBJECTIVES}
+    sim: dict = {a: {} for a in COMPARE_OBJECTIVES}
+    ident: dict = {a: {} for a in COMPARE_OBJECTIVES}
+    for a in COMPARE_OBJECTIVES:
+        for b in COMPARE_OBJECTIVES:
+            ca, cb = routes[a]["_cells"], routes[b]["_cells"]
+            sa, sb = set(ca), set(cb)
+            sim[a][b] = len(sa & sb) / len(sa | sb) if sa | sb else 1.0
+            ident[a][b] = ca == cb
+    for r in routes.values():
+        r.pop("_cells")
+    return {"routes": routes, "similarity": sim, "identical": ident, "grid": {"name": grid.name, "resolution_m": grid.resolution_m}}

@@ -69,6 +69,30 @@ def test_auto_grid_prefers_hirise_inside_window(base_url):
     assert code == 200 and res["grid"]["name"] == "ctx"
 
 
+def test_compare_endpoint_real_terrain(base_url):
+    landing = [77.45088572, 18.44462715]
+    delta = [77.40, 18.455]
+    code, res = post(base_url + "/api/compare", {"points": [landing, delta], "max_slope_deg": 25})
+    assert code == 200, res
+    rs = res["routes"]
+    assert set(rs) == {"fastest", "shortest", "lower_risk"}
+    for o in rs:
+        assert rs["fastest"]["walk_time_s"] <= rs[o]["walk_time_s"] + 1e-6
+        assert rs["shortest"]["distance_m"] <= rs[o]["distance_m"] + 1e-6
+        assert rs["lower_risk"]["objective_costs"]["lower_risk_s"] <= rs[o]["objective_costs"]["lower_risk_s"] + 1e-6
+        assert rs[o]["model"]["kind"] == "estimate" and "_cells" not in rs[o]
+    assert 0 <= res["similarity"]["fastest"]["lower_risk"] <= 1
+
+
+def test_route_objective_param(base_url):
+    pts = [[77.45088572, 18.44462715], [77.40, 18.455]]
+    code, default = post(base_url + "/api/route", {"points": pts, "grid": "ctx"})
+    code2, balanced = post(base_url + "/api/route", {"points": pts, "grid": "ctx", "objective": "balanced"})
+    assert code == code2 == 200
+    assert default["distance_m"] == balanced["distance_m"] and default["objective"] == "balanced"
+    assert post(base_url + "/api/route", {"points": pts, "objective": "scenic"})[0] == 400
+
+
 def test_route_rejects_outside_aoi(base_url):
     code, res = post(base_url + "/api/route", {"points": [[77.45, 18.44], [10.0, 10.0]]})
     assert code == 422 and "outside" in res["error"]

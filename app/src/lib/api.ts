@@ -1,4 +1,4 @@
-import type { LonLat, Manifest, Poi, RouteResult, WeatherSol } from "../types";
+import type { CompareResult, LonLat, Manifest, Objective, Poi, RouteResult, WeatherSol } from "../types";
 
 export async function loadStatic() {
   const [manifest, pois, weather, rover] = await Promise.all([
@@ -19,15 +19,21 @@ export async function apiHealth(): Promise<boolean> {
   }
 }
 
-export async function planRoute(points: LonLat[], maxSlopeDeg: number): Promise<RouteResult> {
-  const r = await fetch("/api/route", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ points, max_slope_deg: maxSlopeDeg, grid: "auto" }),
-  });
+async function post<T>(url: string, payload: unknown): Promise<T> {
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
   const body = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
   if (!r.ok) throw new Error(body.error ?? `HTTP ${r.status}`);
-  return body as RouteResult;
+  return body as T;
+}
+
+/** One route. objective defaults to the original "balanced" planner on the server. */
+export function planRoute(points: LonLat[], maxSlopeDeg: number, objective?: Objective): Promise<RouteResult> {
+  return post<RouteResult>("/api/route", { points, max_slope_deg: maxSlopeDeg, grid: "auto", ...(objective ? { objective } : {}) });
+}
+
+/** Fastest / Shortest / Lower Risk routes for the same itinerary. */
+export function compareRoutes(points: LonLat[], maxSlopeDeg: number): Promise<CompareResult> {
+  return post<CompareResult>("/api/compare", { points, max_slope_deg: maxSlopeDeg, grid: "auto" });
 }
 
 export interface TerrainProbe {

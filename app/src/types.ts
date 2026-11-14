@@ -56,6 +56,7 @@ export interface Poi {
   description?: string;
   position_quality: "measured" | "estimated";
   position_method?: string;
+  position_offset_sols?: number;
   number?: number;
   sol_sealed?: number;
   date_sealed?: string;
@@ -91,8 +92,12 @@ export interface RouteResult {
   mean_slope_deg: number;
   slope_class_fraction: { easy: number; moderate: number; hazard: number; nogo: number };
   est_time_s: number;
+  /** Pure Tobler walking time (no slope penalty). Present from API v2. */
+  walk_time_s: number;
+  objective_costs: { fastest_s: number; shortest_m: number; lower_risk_s: number; balanced_s: number };
+  objective?: string;
   difficulty: { score: number; label: string };
-  profile: { distance_m: number[]; elevation_m: number[] };
+  profile: { distance_m: number[]; elevation_m: number[]; slope_deg: number[]; walk_time_s: number[] };
   path_lonlat: LonLat[];
   stop_indices: number[];
   grid: { name: string; resolution_m: number };
@@ -101,7 +106,32 @@ export interface RouteResult {
   model: { kind: string; note: string };
 }
 
+export type Objective = "lower_risk" | "fastest" | "shortest";
+
+export interface CompareResult {
+  routes: Record<Objective, RouteResult>;
+  similarity: Record<Objective, Record<Objective, number>>;
+  identical: Record<Objective, Record<Objective, boolean>>;
+  grid: { name: string; resolution_m: number };
+  compute_ms: number;
+}
+
 export type StopRole = "start" | "waypoint" | "destination";
+
+export type MissionMode = "solo" | "team";
+export type TeamSlot = "aStart" | "aDest" | "bStart" | "bDest" | "meet";
+
+export interface EvaSettings {
+  availableMin: number | null;
+  scienceMinPerStop: number;
+  reservePct: number;
+  paceFactor: number;
+  o2Budget: number | null;
+  o2RatePerHour: number | null;
+  o2Unit: string;
+  powerBudgetWh: number | null;
+  powerDrawW: number | null;
+}
 
 export interface Stop {
   id: string;
@@ -120,4 +150,7 @@ export interface SavedRoute {
   maxSlopeDeg: number;
   notes: string;
   summary?: { distance_m: number; elevation_gain_m: number; max_slope_deg: number; grid: string };
+  objective?: Objective;
+  scienceMission?: string | null;
+  eva?: EvaSettings;
 }

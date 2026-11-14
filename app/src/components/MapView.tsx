@@ -1,8 +1,8 @@
 import L from "leaflet";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { CircleMarker, GeoJSON, ImageOverlay, MapContainer, Marker, Pane, Polyline, Popup, Tooltip, useMap, useMapEvents } from "react-leaflet";
 import { formatLat, formatLon, metersPerDegLon, niceScale } from "../lib/mars";
-import type { LonLat, Manifest, Poi, RouteResult, Stop, StopRole } from "../types";
+import type { LonLat, Manifest, Poi, RouteResult, Stop, StopRole, TeamSlot } from "../types";
 import { Icon, KindBadge, Term } from "./ui";
 
 /** Mars CRS: map units are planetocentric degrees (y = lat, x = east lon).
@@ -34,9 +34,33 @@ interface Props {
   onPlanTo: (poi: Poi) => void;
   planning: boolean;
   hint: string;
+  /** Selected route colour (Compare Routes) */
+  routeColor?: string;
+  /** Non-selected compared routes, drawn underneath */
+  altRoutes?: { key: string; label: string; route: RouteResult; color: string; dash?: string }[];
+  /** Safety alert markers (steep stretches) */
+  alertMarkers?: { key: string; at: LonLat; title: string; why: string }[];
+  /** Two-astronaut mode */
+  teamRoutes?: { key: string; label: string; route: RouteResult; color: string }[];
+  teamPins?: { key: string; at: LonLat; label: string; who: "A" | "B" | "meet" }[];
+  teamMode?: boolean;
+  onTeamSlot?: (poi: Poi, slot: TeamSlot) => void;
+  /** Overrides the "Click the map to place the …" label */
+  placeLabel?: string;
 }
 
 const ROLE_LABEL: Record<StopRole, string> = { start: "start", waypoint: "waypoint", destination: "destination" };
+
+function teamIcon(who: "A" | "B" | "meet") {
+  return L.divIcon({ className: "", html: `<div class="stop-pin stop-team-${who}"><span></span></div>`, iconSize: [26, 34], iconAnchor: [13, 32] });
+}
+
+const alertIcon = L.divIcon({
+  className: "",
+  html: `<div class="alert-pin" aria-hidden="true"><svg viewBox="0 0 24 24" width="28" height="28"><path d="M8 1.5h8l6.5 6.5v8l-6.5 6.5H8L1.5 16V8z" fill="#D98EBA" stroke="#F1EDF5" stroke-width="1.8"/><path d="M12 6.5v6.5M12 16.6v.4" stroke="#131522" stroke-width="2.6" stroke-linecap="round"/></svg></div>`,
+  iconSize: [28, 28],
+  iconAnchor: [14, 14],
+});
 
 function stopIcon(role: StopRole) {
   return L.divIcon({
@@ -160,6 +184,8 @@ function ScaleBar() {
 
 export function MapView(props: Props) {
   const { manifest, pois, rover, layers, opacity, stops, route, hoverIndex, placeMode, flyTarget, onMapClick, onCursor, onPoiAction, onPlanTo, planning, hint } = props;
+  const routeColor = props.routeColor ?? "#76C9C2";
+  const ll = (r: RouteResult) => r.path_lonlat.map(([x, y]) => [y, x] as [number, number]);
   const a = manifest.aoi;
   const maxBounds = useMemo(() => L.latLngBounds([a.lat_min - 0.02, a.lon_min - 0.03], [a.lat_max + 0.02, a.lon_max + 0.03]), [a]);
   const L_ = manifest.layers;
@@ -234,14 +260,27 @@ export function MapView(props: Props) {
           </Pane>
         )}
         <Pane name="route" style={{ zIndex: 450 }}>
+          {props.altRoutes?.map((a) => (
+            <Polyline key={a.key} positions={ll(a.route)} pathOptions={{ color: a.color, weight: 3, opacity: 0.85, dashArray: a.dash ?? "6 6", lineCap: "round" }}>
+              <Tooltip sticky className="map-tip">{a.label} option · click Compare in the planner to select it</Tooltip>
+            </Polyline>
+          ))}
+          {props.teamRoutes?.map((t) => (
+            <Fragment key={t.key}>
+              <Polyline positions={ll(t.route)} pathOptions={{ color: "#131522", weight: 7, opacity: 0.35, interactive: false }} />
+              <Polyline positions={ll(t.route)} pathOptions={{ color: t.color, weight: 3.5, opacity: 1 }}>
+                <Tooltip sticky className="map-tip">{t.label}</Tooltip>
+              </Polyline>
+            </Fragment>
+          ))}
           {routeLatLngs.length > 1 && (
             <>
               <Polyline positions={routeLatLngs} pathOptions={{ color: "#131522", weight: 7, opacity: 0.35, interactive: false }} />
-              <Polyline positions={routeLatLngs} pathOptions={{ color: "#76C9C2", weight: 3.5, opacity: 1, interactive: false }} />
+              <Polyline positions={routeLatLngs} pathOptions={{ color: routeColor, weight: 4, opacity: 1, interactive: false }} />
             </>
           )}
           {route && route.path_lonlat.filter((_, i) => i % Math.max(1, Math.floor(route.path_lonlat.length / 8)) === 0 && i > 0).map(([x, y], i) => (
-            <CircleMarker key={i} center={[y, x]} radius={3} pathOptions={{ color: "#F1EDF5", fillColor: "#76C9C2", fillOpacity: 1, weight: 1.5, interactive: false }} />
+            <CircleMarker key={i} center={[y, x]} radius={3} pathOptions={{ color: "#F1EDF5", fillColor: routeColor, fillOpacity: 1, weight: 1.5, interactive: false }} />
           ))}
           {hoverPt && <CircleMarker center={[hoverPt[1], hoverPt[0]]} radius={7} pathOptions={{ color: "#F1EDF5", fillColor: "#D98EBA", fillOpacity: 1, weight: 2 }} />}
         </Pane>
@@ -270,7 +309,18 @@ export function MapView(props: Props) {
                     <p className="popup-desc">{p.description}</p>
                   )}
                   {p.position_method && <p className="popup-note">{p.position_method}</p>}
-                  {planning ? (
+                  {planning && props.teamMode ? (
+                    <>
+                      <div className="popup-q">Use this spot for the team:</div>
+                      <div className="popup-actions">
+                        <button className="btn-mini teal" onClick={thenClose(() => props.onTeamSlot?.(p, "aDest"))}>A destination</button>
+                        <button className="btn-mini lav" onClick={thenClose(() => props.onTeamSlot?.(p, "bDest"))}>B destination</button>
+                        <button className="btn-mini rose" onClick={thenClose(() => props.onTeamSlot?.(p, "meet"))}>Rendezvous</button>
+                        <button className="btn-mini teal" onClick={thenClose(() => props.onTeamSlot?.(p, "aStart"))}>A start</button>
+                        <button className="btn-mini lav" onClick={thenClose(() => props.onTeamSlot?.(p, "bStart"))}>B start</button>
+                      </div>
+                    </>
+                  ) : planning ? (
                     <>
                       <div className="popup-q">Use this spot in your Marswalk:</div>
                       <div className="popup-actions">
@@ -290,6 +340,21 @@ export function MapView(props: Props) {
               </Popup>
             </Marker>
           ))}
+        {props.alertMarkers?.map((a) => (
+          <Marker key={a.key} position={[a.at[1], a.at[0]]} icon={alertIcon} zIndexOffset={900}>
+            <Tooltip direction="top" offset={[0, -10]} className="map-tip alert-tip">
+              <b>⚠ {a.title}</b>
+              <span>{a.why}</span>
+            </Tooltip>
+          </Marker>
+        ))}
+        {props.teamPins?.map((t) => (
+          <Marker key={t.key} position={[t.at[1], t.at[0]]} icon={teamIcon(t.who)} zIndexOffset={1000} interactive={false}>
+            <Tooltip permanent direction="auto" offset={[0, -18]} className={`stop-label label-team-${t.who}`}>
+              {t.label}
+            </Tooltip>
+          </Marker>
+        ))}
         {stops.map((s) => (
           <Marker key={s.id} position={[s.lat, s.lon]} icon={stopIcon(s.role)} zIndexOffset={1000} interactive={false}>
             <Tooltip permanent direction="auto" offset={[0, -18]} className={`stop-label label-${s.role}`}>
@@ -322,7 +387,7 @@ export function MapView(props: Props) {
 
       <div className={`map-hint ${placeMode ? `placing-${placeMode}` : ""}`} role="status">
         <Icon name={placeMode ? "pin" : "info"} size={14} />
-        {placeMode ? `Click the map to place the ${ROLE_LABEL[placeMode]}` : hint}
+        {placeMode ? (props.placeLabel ? `Click the map to place ${props.placeLabel}` : `Click the map to place the ${ROLE_LABEL[placeMode]}`) : hint}
       </div>
 
       <div className="credit">CTX: NASA/JPL/MSSS · HiRISE: NASA/JPL/UArizona · DTMs: USGS Astrogeology · Traverse: NASA/JPL-Caltech</div>

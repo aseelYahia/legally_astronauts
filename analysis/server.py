@@ -2,7 +2,9 @@
 
 GET  /api/health                      -> status + loaded grids
 GET  /api/terrain?lon=..&lat=..       -> elevation / slope / hazard class at a point
-POST /api/route {points:[[lon,lat],...], max_slope_deg?, grid?: "auto"|"ctx"|"hirise"}
+POST /api/route {points:[[lon,lat],...], max_slope_deg?, grid?: "auto"|"ctx"|"hirise",
+                 objective?: "balanced"(default)|"fastest"|"shortest"|"lower_risk"}
+POST /api/compare {points, max_slope_deg?, grid?} -> fastest / shortest / lower_risk routes + similarity
 """
 from __future__ import annotations
 
@@ -17,7 +19,7 @@ import numpy as np
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "analysis"))
-from pawprint.routing import TerrainGrid, plan_route  # noqa: E402
+from pawprint.routing import OBJECTIVES, TerrainGrid, compare_routes, plan_route  # noqa: E402
 from pawprint.terrain import DEFAULT_MAX_SLOPE_DEG, hazard_class  # noqa: E402
 
 PROC = ROOT / "data" / "processed"
@@ -87,7 +89,8 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, {"error": "not found"})
 
     def do_POST(self):  # noqa: N802
-        if urlparse(self.path).path != "/api/route":
+        path = urlparse(self.path).path
+        if path not in ("/api/route", "/api/compare"):
             return self._send(404, {"error": "not found"})
         try:
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
@@ -95,20 +98,33 @@ class Handler(BaseHTTPRequestHandler):
             max_slope = float(body.get("max_slope_deg", DEFAULT_MAX_SLOPE_DEG))
             if not 5 <= max_slope <= 45:
                 raise ValueError("max_slope_deg must be between 5 and 45")
+            objective = str(body.get("objective", "balanced"))
+            if objective not in OBJECTIVES:
+                raise ValueError(f"objective must be one of {', '.join(OBJECTIVES)}")
         except (KeyError, ValueError, TypeError, json.JSONDecodeError) as e:
             return self._send(400, {"error": f"bad request: {e}"})
         grid = choose_grid(points, body.get("grid", "auto"))
         t = time.perf_counter()
         try:
-            res = plan_route(grid, points, max_slope)
+            if path == "/api/route":
+                res = plan_route(grid, points, max_slope, objective)
+                res.pop("_cells", None)
+            else:
+                res = compare_routes(grid, points, max_slope)
         except ValueError as e:
             return self._send(422, {"error": str(e), "grid": grid.name})
         res["compute_ms"] = round((time.perf_counter() - t) * 1000, 1)
-        res["model"] = {
+        model = {
             "kind": "estimate",
-            "note": "Distances and elevations come from the USGS DTM. Walking time uses Tobler's Earth hiking function plus a "
-            "slope-hazard factor; it is an estimate not validated for suited EVA on Mars.",
+            "note": "Distances and elevations come from the USGS DTM. Walking time uses Tobler's Earth hiking function; "
+            "slope penalties are PAWPRINT planning assumptions. Estimates are not validated for suited EVA on Mars.",
         }
+        if path == "/api/compare":
+            for r in res["routes"].values():
+                r["compute_ms"] = res["compute_ms"]
+                r["model"] = model
+        else:
+            res["model"] = model
         self._send(200, res)
 
     def log_message(self, fmt, *args):
