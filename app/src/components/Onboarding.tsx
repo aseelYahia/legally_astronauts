@@ -7,12 +7,12 @@ const STEPS = [
     body: "I'm your mission pup. Together we'll explore Jezero Crater, where Perseverance landed in 2021, using real NASA and USGS terrain data.",
   },
   {
-    title: "Toggle mission layers",
-    body: "The left panel stacks CTX imagery, elevation, slope hazards, rover tracks and sample sites. Each one is labelled with where its data came from.",
+    title: "Explore the crater",
+    body: "In Explore, click anywhere on the map to see how high and how steep the ground is. Hover a marker to see which rock sample was collected there.",
   },
   {
-    title: "Plan a moonwalk… er, Marswalk",
-    body: "In Mission Planner, pick a start, add waypoints and choose a sample site. The Python engine runs terrain-aware A* over the real DTM and reports distance, climb and slope.",
+    title: "Plan a Marswalk",
+    body: "In Mission Planner, pick a start and a science destination, then press Plan Route. Our Python planner finds a lower-risk path over the real terrain, and you can review and save it.",
   },
 ];
 
@@ -30,9 +30,9 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
           <div className="modal-actions">
             <button className="btn btn-ghost" onClick={onDone}>Skip</button>
             {i < STEPS.length - 1 ? (
-              <button className="btn btn-solid" onClick={() => setI(i + 1)}>Next</button>
+              <button className="btn btn-primary" onClick={() => setI(i + 1)}>Next</button>
             ) : (
-              <button className="btn btn-solid" onClick={onDone}>Let's explore</button>
+              <button className="btn btn-primary" onClick={onDone}>Let's explore</button>
             )}
           </div>
         </div>

@@ -46,12 +46,12 @@ export function ElevationProfile({ distance, elevation, stopIndices, stopLabels,
     <svg className="profile" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Route elevation profile">
       <defs>
         <linearGradient id={`fill${id}`} x1="0" x2="1" y1="0" y2="0">
-          <stop offset="0" stopColor="#8b6cff" stopOpacity="0.55" />
-          <stop offset="1" stopColor="#2ee6d6" stopOpacity="0.55" />
+          <stop offset="0" stopColor="#a99bdd" stopOpacity="0.55" />
+          <stop offset="1" stopColor="#76c9c2" stopOpacity="0.55" />
         </linearGradient>
         <linearGradient id={`stroke${id}`} x1="0" x2="1">
-          <stop offset="0" stopColor="#a78bfa" />
-          <stop offset="1" stopColor="#5ff5e6" />
+          <stop offset="0" stopColor="#a99bdd" />
+          <stop offset="1" stopColor="#76c9c2" />
         </linearGradient>
       </defs>
       {geom.yt.map((z) => (
