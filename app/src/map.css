@@ -1,0 +1,87 @@
+/* Interactive map UX: grouping, labels, routes, controls, cursor modes. Soft Cosmic palette. */
+
+/* cursor tells you what a click will do */
+.map-wrap.inspecting .leaflet-container { cursor: crosshair; }
+.map-wrap.planning .leaflet-container { cursor: grab; }
+.map-wrap.planning .leaflet-container:active { cursor: grabbing; }
+.map-wrap.placing .leaflet-container { cursor: copy; }
+.leaflet-marker-icon.poi-marker { cursor: pointer; }
+
+/* sample groups (several samples at one or nearby rover positions) */
+.poi-cluster {
+  width: 26px; height: 26px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--lav); color: var(--navy); font-weight: 800; font-size: 12.5px;
+  border: 2.5px solid var(--ivory);
+  box-shadow: 0 0 0 4px rgba(169, 155, 221, 0.28), 0 2px 6px rgba(5, 6, 14, 0.5);
+  transition: transform 0.15s var(--ease), box-shadow 0.15s var(--ease);
+}
+.poi-group-marker:hover .poi-cluster { transform: scale(1.12); box-shadow: 0 0 0 6px rgba(169, 155, 221, 0.36), 0 2px 6px rgba(5, 6, 14, 0.5); }
+.poi-label.group-label b { display: block; }
+
+/* selected marker (its popup is open) */
+.leaflet-marker-icon.is-selected .poi-pin { transform: rotate(45deg) scale(1.45); box-shadow: 0 0 0 4px rgba(169, 155, 221, 0.55), 0 1px 4px rgba(5, 6, 14, 0.55); }
+.leaflet-marker-icon.is-selected .poi-pin.landing { transform: scale(1.35); }
+.leaflet-marker-icon.is-selected .poi-cluster { background: var(--ivory); box-shadow: 0 0 0 5px var(--lav), 0 2px 6px rgba(5, 6, 14, 0.5); }
+.leaflet-marker-icon.is-selected .poi-label { display: none; }
+
+/* group chooser popup */
+.group-popup .popup-note { margin: 4px 0 8px; }
+.group-list { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow-y: auto; }
+.group-item { width: 100%; display: grid; grid-template-columns: 12px 1fr; column-gap: 8px; align-items: center; text-align: left; padding: 7px 9px; border-radius: 9px; border: 1px solid var(--line-2); background: rgba(241, 237, 245, 0.03); color: var(--ivory); cursor: pointer; }
+.group-item:hover, .group-item:focus-visible { background: var(--lav-soft); border-color: var(--lav-line); }
+.group-item .poi-dot { grid-row: span 2; }
+.gi-name { font-weight: 600; font-size: 13px; }
+.gi-meta { grid-column: 2; font-size: 11.5px; color: var(--muted); }
+.back-link { display: inline-block; margin-bottom: 6px; font-size: 12px; }
+
+/* persistent labels (screen space, collision-free) */
+.map-labels { position: absolute; inset: 0; z-index: 640; pointer-events: none; }
+.map-label-leaders { position: absolute; inset: 0; overflow: visible; }
+.map-label-leaders line { stroke: rgba(241, 237, 245, 0.75); stroke-width: 1.4; }
+.map-label {
+  position: absolute; display: flex; align-items: center; justify-content: center;
+  padding: 0 6px; border-radius: 8px; white-space: nowrap; overflow: hidden;
+  background: rgba(34, 36, 56, 0.9); border: 1px solid var(--line-2);
+  color: var(--ivory); font-size: 12px; font-weight: 600; line-height: 1;
+  box-shadow: 0 1px 4px rgba(5, 6, 14, 0.4);
+}
+.map-label.sel { border-color: var(--lav); background: rgba(52, 48, 86, 0.96); }
+.leaflet-zoom-anim .map-labels { opacity: 0; }
+
+/* routes */
+.route-arrow { pointer-events: none; }
+.route-arrow svg { display: block; filter: drop-shadow(0 0 1.5px rgba(19, 21, 34, 0.9)); }
+.route-chip-wrap { pointer-events: none; }
+.route-chip {
+  position: absolute; left: 0; top: 0; transform: translate(-50%, -150%);
+  padding: 3px 8px; border-radius: 999px; white-space: nowrap;
+  background: rgba(19, 21, 34, 0.88); border: 1.5px solid var(--c); color: var(--ivory);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.01em;
+  box-shadow: 0 1px 4px rgba(5, 6, 14, 0.45);
+}
+.route-chip.sel { background: var(--lav); color: var(--navy); border-color: var(--ivory); }
+
+/* numbered stop pins */
+.stop-pin span {
+  left: 6px !important; top: 3px !important; width: 14px !important; height: 14px !important;
+  background: none !important; color: var(--navy); font-size: 10.5px; font-weight: 800;
+  display: grid; place-items: center; line-height: 1;
+}
+.stop-pin span:empty { left: 9px !important; top: 6px !important; width: 8px !important; height: 8px !important; background: var(--ivory) !important; border-radius: 50%; }
+
+/* controls & legends readability */
+.map-buttons button { position: relative; }
+.map-buttons button[aria-label="Reset view"]::after,
+.map-buttons button[aria-label="Fit route"]::after {
+  content: attr(title); position: absolute; right: calc(100% + 8px); top: 50%; transform: translateY(-50%);
+  white-space: nowrap; padding: 4px 8px; border-radius: 8px; background: rgba(19, 21, 34, 0.95); color: var(--ivory);
+  font-size: 11.5px; font-weight: 600; opacity: 0; pointer-events: none; transition: opacity 0.15s;
+}
+.map-buttons button:hover::after, .map-buttons button:focus-visible::after { opacity: 1; }
+.legend-title { font-size: 12.5px; }
+.legend-ticks { font-size: 11px; color: var(--text-2); }
+.scalebar { font-size: 12px; }
+
+/* keep the instruction banner at the top so it never sits on routes in the lower map */
+.map-hint { bottom: auto; top: 70px; }

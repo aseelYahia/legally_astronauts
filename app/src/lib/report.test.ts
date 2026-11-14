@@ -58,7 +58,8 @@ describe("Mission report PDF", () => {
     regular: readFileSync(resolve(__dirname, "../../node_modules/@expo-google-fonts/inter/400Regular/Inter_400Regular.ttf")).toString("base64"),
     bold: readFileSync(resolve(__dirname, "../../node_modules/@expo-google-fonts/inter/700Bold/Inter_700Bold.ttf")).toString("base64"),
   };
-  const logOf = (d: unknown) => (d as { textLog: string[] }).textLog.join("\n");
+  // wrapped lines are joined with spaces so phrases that wrap across lines still match
+  const logOf = (d: unknown) => (d as { textLog: string[] }).textLog.join(" ").replace(/\s+/g, " ");
 
   it("builds a multi-page solo PDF that reflects the selected plan (embedded Unicode font)", () => {
     const doc = buildReportPdf(input, null, null, fonts);

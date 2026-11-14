@@ -48,7 +48,10 @@ Routes are planning estimates from orbital data, **not certified safe for astron
 | Rover tracks / landing site | NASA/JPL MMGIS `M20_traverse.json`, `M20_waypoints.json` | rover localizations | NASA data |
 | Sample sites | NASA Mars Rock Samples page (names, sols, types) | positions **estimated** from the rover localization on the sealing sol | NASA data + estimate |
 | Weather | NASA MEDA public feed, sols 1127–1133 (feed no longer updated) | daily | NASA data (archived) |
-| Minerals (CRISM) | not ingested | — | disabled |
+| Minerals (CRISM) | CRISM MTRDR summary parameters (PDS), 3 observations, co-registered to CTX | 18 m | derived: potential indicators from assumed thresholds |
+| Geologic units | USGS SIM 3464 (Sun & Stack 2020), DOI 10.3133/sim3464 | 1:75,000 | NASA/USGS data (100–200 m offsets) |
+| HiRISE close-up photo | Mars 2020 TRN HiRISE orthomosaic via NASA Mars Trek, DOI 10.5066/P9QJDP48 | ~1.2 m (from 25 cm) | NASA data |
+| Mars Ground View | Perseverance raw-image API, geolocated by exact NASA site/drive match | rover photos | NASA data (archived) |
 
 Raw files live in `data/raw/` (git-ignored). Provenance, dates and citations are in `analysis/pawprint/sources.py`, and the
 app shows them under **Science Data**.
@@ -69,6 +72,13 @@ cos(latitude). That correction is about 5 % at Jezero.
   cross-checked against a GDAL read before the file is written.
 * Synthetic-terrain tests for slope, aspect, roughness and hillshade, an A* optimality test against brute-force Dijkstra,
   and an end-to-end API test against the great-circle lower bound.
+
+## NASA data verification & scientific expansion
+`analysis/scripts/build_nasa_extras.py` adds four official-resource datasets: Perseverance raw images, the USGS geologic
+map, CRISM mineral indicators and the Mars Trek HiRISE orthomosaic. Run it after `build_layers.py`.
+* [`NASA_RESOURCES_INTEGRATION.md`](NASA_RESOURCES_INTEGRATION.md) covers every dataset, the challenge resource it came
+  from, its processing, attribution, limitations and the final feature table.
+* [`DATA_VERIFICATION.md`](DATA_VERIFICATION.md) has the pre-integration audit and the post-integration checks.
 
 ## Models and assumptions (labelled in the UI)
 * **Slope**: Horn 3×3 on true ground spacing. A 20 m DTM smooths out boulders and small scarps, so real local slopes are steeper.

@@ -6,3 +6,8 @@ __pycache__/
 # Raw NASA/USGS downloads are reproducible from analysis/pawprint/sources.py
 data/raw/*.tif
 *.log
+
+# Re-downloadable NASA/USGS caches (rebuilt by analysis/scripts/build_nasa_extras.py)
+data/raw/extras/
+# Full screenshot sets kept locally; a curated subset is committed under docs/
+docs/_archive/

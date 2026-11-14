@@ -110,9 +110,10 @@ export function recommend(missionId: string, pois: Poi[], from: { lon: number; l
     distance_m: d,
     why: campaignWhy(p),
     learn: m.learn,
-    data: `NASA sample #${p.number} "${p.name}": ${p.type}, sealed sol ${p.sol_sealed} (${p.date_sealed})${p.core_length_cm ? `, ${p.core_length_cm} cm core` : ""}.`,
+    data: `NASA sample #${p.number} "${p.name}": ${p.type?.startsWith("Rock core") ? "Rock Core" : p.type} (PAWPRINT class: ${p.type}), sealed sol ${p.sol_sealed} (${p.date_sealed})${p.core_length_cm ? `, ${p.core_length_cm} cm core` : ""}.`,
     uncertainty:
       `Map position is estimated from the rover's NASA localization ${p.position_offset_sols ?? "?"} sols before sealing. ` +
-      "The rock type comes from NASA's table; PAWPRINT has no mineral maps.",
+      "NASA's table gives the sample type (e.g. Rock Core); the igneous/sedimentary class is PAWPRINT's campaign summary. " +
+      "CRISM orbital mineral indicators are a separate map layer and are not used to pick targets.",
   }));
 }

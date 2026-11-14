@@ -1,5 +1,6 @@
 import { formatLat, formatLon } from "../lib/mars";
 import type { TerrainProbe } from "../lib/api";
+import { INDICATOR_LABEL, unitAt, type GeologyFile, type MineralProbe, type PhotosFile } from "../lib/nasaExtras";
 import type { Poi, WeatherSol } from "../types";
 import { DogTip, Icon, KindBadge, Mascot, Term } from "./ui";
 
@@ -21,6 +22,10 @@ export function ExplorePanel({
   onPlan,
   sheetOpen,
   toggleSheet,
+  geology,
+  mineralProbe,
+  photos,
+  onOpenGroundView,
 }: {
   probe: TerrainProbe | null;
   probeBusy: boolean;
@@ -31,9 +36,15 @@ export function ExplorePanel({
   onPlan: (p: Poi) => void;
   sheetOpen: boolean;
   toggleSheet: () => void;
+  geology: GeologyFile | null;
+  mineralProbe: MineralProbe | null;
+  photos: PhotosFile | null;
+  onOpenGroundView: (poiId: string | null) => void;
 }) {
   const latest = [...weather].reverse().find((s) => s.min_temp_c !== null && s.max_temp_c !== null);
   const samples = pois.filter((p) => p.category === "sample");
+  const unit = probe ? unitAt(geology, probe.lon, probe.lat) : null;
+  const mp = mineralProbe && probe && Math.abs(mineralProbe.lon - probe.lon) < 1e-9 && Math.abs(mineralProbe.lat - probe.lat) < 1e-9 ? mineralProbe : null;
   return (
     <aside className={`panel right-panel explore ${sheetOpen ? "sheet-open" : ""}`} aria-label="Explore Jezero Crater">
       <button className="sheet-handle" onClick={toggleSheet} aria-expanded={sheetOpen}>
@@ -70,6 +81,52 @@ export function ExplorePanel({
                   <span className="haz-text">{HAZ_TEXT[s.hazard_class] ?? ""}</span>
                 </div>
               ))}
+              {geology && (
+                <div className="probe-extra">
+                  <div className="probe-src">
+                    Geologic unit · USGS SIM 3464 <KindBadge kind="real" title="Sun & Stack 2020, 1:75,000; boundaries approximate (±100–200 m)" />
+                  </div>
+                  {unit ? (
+                    <>
+                      <div className="unit-name"><i style={{ background: unit.color }} /> <b>{unit.symbol}</b> {unit.name}</div>
+                      <details className="disclosure">
+                        <summary>USGS description and interpretation</summary>
+                        <p className="fine">{unit.description}</p>
+                        <p className="fine"><b>USGS interpretation (2020, before the rover landed):</b> {unit.interpretation}</p>
+                      </details>
+                      <p className="fine muted">A mapped rock formation, not a mineral detection. Boundary approximate (±100–200 m).</p>
+                    </>
+                  ) : (
+                    <p className="fine muted">No mapped unit at this point.</p>
+                  )}
+                </div>
+              )}
+              {mp?.available && (
+                <div className="probe-extra">
+                  <div className="probe-src">
+                    Mineral indicators · CRISM <KindBadge kind="real-derived" title="Potential indicators from CRISM summary parameters" />
+                  </div>
+                  {!mp.measured ? (
+                    <p className="fine muted">No CRISM measurement here, so nothing is shown.</p>
+                  ) : (
+                    <>
+                      {mp.indicators && mp.indicators.length ? (
+                        <ul className="ind-list">
+                          {mp.indicators.map((i) => (
+                            <li key={i.key}><b>{INDICATOR_LABEL[i.key] ?? i.key}</b> ({i.parameter}) — {i.meaning}</li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="fine">No indicator above PAWPRINT's thresholds at this 18 m pixel.</p>
+                      )}
+                      <p className="fine muted">
+                        {mp.product?.observation_id}, observed {mp.product?.start_time.slice(0, 10)} ·{" "}
+                        <a href={mp.product?.label_url} target="_blank" rel="noreferrer">PDS label</a>. Potential indicators, not confirmed minerals.
+                      </p>
+                    </>
+                  )}
+                </div>
+              )}
               <p className="fine muted">Click somewhere else to compare.</p>
             </div>
           ) : (
@@ -129,6 +186,21 @@ export function ExplorePanel({
             <p className="fine">No MEDA values available.</p>
           )}
         </section>
+
+        {photos && (
+          <section className="card">
+            <div className="card-title">
+              <Icon name="camera" size={15} /> Mars Ground View <KindBadge kind="real" title="NASA Perseverance raw images" />
+            </div>
+            <p className="fine">
+              Preview what science stops look like through Perseverance's own cameras: {photos.photos.length} raw NASA photos from the
+              days samples were sealed, {photos.photos.filter((p) => p.location.geolocated).length} placed by NASA localization.
+            </p>
+            <button className="btn-mini lav" onClick={() => onOpenGroundView(null)}>
+              <Icon name="camera" size={13} /> Open Ground View
+            </button>
+          </section>
+        )}
 
         <section className="card">
           <div className="card-title">

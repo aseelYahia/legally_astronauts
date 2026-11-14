@@ -10,6 +10,8 @@ import { SavedRoutes } from "./components/SavedRoutes";
 import { ScienceView } from "./components/ScienceView";
 import { Hint, Icon, KindBadge, Mascot, Term } from "./components/ui";
 import { apiHealth, compareRoutes, loadStatic, planRoute, probeTerrain, type TerrainProbe } from "./lib/api";
+import { loadExtras, probeMinerals, type GeologyFile, type MineralProbe, type PhotosFile } from "./lib/nasaExtras";
+import { GroundView } from "./components/GroundView";
 import { OBJECTIVE_META, OBJECTIVE_ORDER } from "./lib/compare";
 import { DEFAULT_EVA, evaPlan as computeEva, teamEvaPlan } from "./lib/eva";
 import { noRouteAlert, routeAlerts, sortAlerts, steepStretches, type Alert } from "./lib/safety";
@@ -49,7 +51,15 @@ export default function App() {
   const isNarrow = useMedia("(max-width: 1180px)");
   // On tablets and phones the layers panel is an overlay drawer, so start with it closed.
   const [left, setLeft] = useState<Left>(() => (typeof window !== "undefined" && window.innerWidth <= 1180 ? null : "layers"));
-  const [layers, setLayers] = useState<Record<LayerKey, boolean>>({ terrain: true, elevation: true, slope: true, geology: true, rover: false, weather: true });
+  const [layers, setLayers] = useState<Record<LayerKey, boolean>>({
+    terrain: true, elevation: true, slope: true, geology: true, rover: false, weather: true,
+    hirise_img: false, geomap: false, minerals: false, photos: false,
+  });
+  const [extras, setExtras] = useState<{ photos: PhotosFile | null; geology: GeologyFile | null }>({ photos: null, geology: null });
+  const [mineralOpacity, setMineralOpacity] = useState(0.85);
+  const [roverMaxSol, setRoverMaxSol] = useState<number | null>(null);
+  const [groundView, setGroundView] = useState<{ poiId: string | null } | null>(null);
+  const [mineralProbe, setMineralProbe] = useState<MineralProbe | null>(null);
   const [opacity, setOpacity] = useState(0.65);
   const [stops, setStops] = useState<Stop[]>([]);
   const [placeMode, setPlaceMode] = useState<PlaceMode>(null);
@@ -88,6 +98,10 @@ export default function App() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [activeIdx, setActiveIdx] = useState(0);
   const [planRequest, setPlanRequest] = useState(0);
+
+  useEffect(() => {
+    void loadExtras().then(setExtras);
+  }, []);
 
   useEffect(() => {
     loadStatic()
@@ -213,6 +227,7 @@ export default function App() {
       if (view === "explore") {
         setProbeBusy(true);
         if (isMobile) setSheetOpen(true);
+        void probeMinerals(lon, lat).then(setMineralProbe);
         probeTerrain(lon, lat)
           .then((p) => {
             setProbe(p);
@@ -436,7 +451,7 @@ export default function App() {
               : "All points set: press Plan Both in the planner panel"
             : "Place both starts, both destinations and the rendezvous"
       : step === 1
-        ? "Press + Start, then click the map, or click a marker and choose Set as start"
+        ? "Press Pick start on map in the planner, or click a marker and choose Set as start"
         : step === 2
           ? "Click a rock sample marker and choose Set destination"
           : step === 3
@@ -513,7 +528,7 @@ export default function App() {
 
         {view === "science" ? (
           <main className="science-main">
-            <ScienceView manifest={manifest} pois={pois} weather={weather} />
+            <ScienceView manifest={manifest} pois={pois} weather={weather} photos={extras.photos} geology={extras.geology} onOpenGroundView={(id) => setGroundView({ poiId: id })} />
           </main>
         ) : (
           <>
@@ -525,6 +540,13 @@ export default function App() {
                 setLayer={(k, v) => setLayers((l) => ({ ...l, [k]: v }))}
                 opacity={opacity}
                 setOpacity={setOpacity}
+                geology={extras.geology}
+                photos={extras.photos}
+                mineralOpacity={mineralOpacity}
+                setMineralOpacity={setMineralOpacity}
+                roverMaxSol={roverMaxSol}
+                setRoverMaxSol={setRoverMaxSol}
+                onOpenGroundView={() => setGroundView({ poiId: null })}
                 onCollapse={() => setLeft(null)}
                 view={view}
               />
@@ -605,6 +627,8 @@ export default function App() {
                       ? OBJECTIVE_ORDER.filter((o) => o !== objective).map((o) => ({ key: o, label: OBJECTIVE_META[o].label, route: compare.routes[o], color: OBJECTIVE_META[o].color, dash: OBJECTIVE_META[o].dash }))
                       : []
                   }
+                  routeKey={objective}
+                  routeLabel={OBJECTIVE_META[objective].label}
                   alertMarkers={steepMarkers}
                   teamMode={mode === "team"}
                   onTeamSlot={(p, slot) => setTeamStop(slot, p.lon, p.lat, p.name, p.id)}
@@ -634,14 +658,21 @@ export default function App() {
                   onPlanTo={planTo}
                   planning={view === "planner"}
                   hint={hint}
+                  geology={extras.geology}
+                  photos={extras.photos}
+                  mineralOpacity={mineralOpacity}
+                  roverMaxSol={roverMaxSol ?? undefined}
+                  onOpenGroundView={(id) => setGroundView({ poiId: id })}
+                  weather={
+                    layers.weather && latestWx ? (
+                      <>
+                        <Icon name="cloud" size={15} />
+                        <span><Term k="sol">Sol</Term> {latestWx.sol} · {latestWx.min_temp_c}° / {latestWx.max_temp_c}° C · {latestWx.pressure_pa} Pa</span>
+                        <KindBadge kind="archived" />
+                      </>
+                    ) : null
+                  }
                 />
-                {layers.weather && latestWx && (
-                  <div className="wx-chip">
-                    <Icon name="cloud" size={15} />
-                    <span><Term k="sol">Sol</Term> {latestWx.sol} · {latestWx.min_temp_c}° / {latestWx.max_temp_c}° C · {latestWx.pressure_pa} Pa</span>
-                    <KindBadge kind="archived" />
-                  </div>
-                )}
                 {view === "planner" && busy && (
                   <div className="computing" role="status">
                     <Mascot pose="floating" size={60} className="bob" />
@@ -688,6 +719,7 @@ export default function App() {
                 setName={setRouteName}
                 stops={stops}
                 pois={pois}
+                geology={extras.geology}
                 removeStop={(id) => setStops((s) => s.filter((x) => x.id !== id))}
                 placeMode={placeMode}
                 setPlaceMode={(m) => { setPlaceMode(m); if (m && isMobile) setSheetOpen(false); }}
@@ -717,6 +749,10 @@ export default function App() {
                 pois={pois}
                 onFly={(p) => fly(p.lon, p.lat, 15.5)}
                 onPlan={planTo}
+                geology={extras.geology}
+                mineralProbe={mineralProbe}
+                photos={extras.photos}
+                onOpenGroundView={(id) => setGroundView({ poiId: id })}
                 sheetOpen={sheetOpen}
                 toggleSheet={() => setSheetOpen(!sheetOpen)}
               />
@@ -732,6 +768,20 @@ export default function App() {
           onClose={() => {
             setGuideOpen(false);
             flag("guideHidden", true);
+          }}
+        />
+      )}
+
+      {groundView && extras.photos && data && (
+        <GroundView
+          photos={extras.photos}
+          pois={data.pois}
+          initialPoiId={groundView.poiId}
+          onClose={() => setGroundView(null)}
+          onFly={(lon, lat) => {
+            if (view === "science") setView("explore");
+            setLayers((l) => ({ ...l, photos: true }));
+            fly(lon, lat, 16);
           }}
         />
       )}

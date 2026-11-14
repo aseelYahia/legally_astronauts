@@ -1,8 +1,25 @@
 import { formatLat, formatLon } from "../lib/mars";
+import { sampleCheck, type GeologyFile, type PhotosFile } from "../lib/nasaExtras";
 import type { Manifest, Poi, Validation, WeatherSol } from "../types";
+import { nasaType } from "./MapView";
+import { ChallengeResources, CrismCard, GeologyCard, GroundViewCard, ObservationTimeline } from "./ScienceExtras";
 import { Icon, KindBadge, Mascot, Term } from "./ui";
 
-export function ScienceView({ manifest, pois, weather }: { manifest: Manifest; pois: Poi[]; weather: WeatherSol[] }) {
+export function ScienceView({
+  manifest,
+  pois,
+  weather,
+  photos,
+  geology,
+  onOpenGroundView,
+}: {
+  manifest: Manifest;
+  pois: Poi[];
+  weather: WeatherSol[];
+  photos: PhotosFile | null;
+  geology: GeologyFile | null;
+  onOpenGroundView: (poiId: string | null) => void;
+}) {
   const ctx = manifest.layers.elevation.stats as Record<string, number | Record<string, number>>;
   const hi = manifest.layers.hirise_elevation?.stats as Record<string, number | Record<string, number> | number[]> | undefined;
   const a = manifest.aoi;
@@ -38,13 +55,13 @@ export function ScienceView({ manifest, pois, weather }: { manifest: Manifest; p
           <Icon name="db" size={20} />
           <span>Data sources</span>
           <b>{Object.keys(manifest.datasets).length} NASA / USGS</b>
-          <em>terrain, imagery, rover, samples, weather</em>
+          <em>terrain, imagery, rover, samples, weather, geology, minerals, photos</em>
         </div>
         <div className="glance-tile">
           <Icon name="terrain" size={20} />
           <span>Sharpest terrain</span>
-          <b>{hi ? "1 m HiRISE" : "20 m CTX"}</b>
-          <em>{hi ? "near the landing site; 20 m CTX elsewhere" : "across the whole area"}</em>
+          <b>{hi ? "HiRISE 1 m DTM" : "20 m CTX"}</b>
+          <em>{hi ? "read out and routed on a 4 m grid near the landing site; 20 m CTX elsewhere" : "across the whole area"}</em>
         </div>
         <div className="glance-tile">
           <Icon name="target" size={20} />
@@ -101,6 +118,10 @@ export function ScienceView({ manifest, pois, weather }: { manifest: Manifest; p
           </p>
         </details>
 
+        <CrismCard manifest={manifest} />
+        <GeologyCard geology={geology} />
+        <GroundViewCard photos={photos} onOpen={() => onOpenGroundView(null)} />
+
         <details className="card disclosure-card">
           <summary><Icon name="cloud" size={15} /> <Term k="meda" /> atmosphere <KindBadge kind="archived" /></summary>
           <p className="fine">
@@ -111,6 +132,9 @@ export function ScienceView({ manifest, pois, weather }: { manifest: Manifest; p
           <p className="fine muted">The public feed has no newer sols. Live/forecast weather is <KindBadge kind="unavailable" />.</p>
         </details>
       </div>
+
+      <ChallengeResources />
+      <ObservationTimeline manifest={manifest} photos={photos} />
 
       <h3 className="section-h">Datasets</h3>
       <div className="dataset-grid">
@@ -138,10 +162,6 @@ export function ScienceView({ manifest, pois, weather }: { manifest: Manifest; p
             </details>
           </article>
         ))}
-        <article className="card dataset">
-          <div className="card-title"><Icon name="crystal" size={15} /> CRISM orbital mineralogy <KindBadge kind="unavailable" /></div>
-          <p className="fine">Mineral maps (olivine, carbonate, clay) are not ingested in this prototype, so the Minerals layer is disabled rather than illustrated.</p>
-        </article>
       </div>
 
       <details className="disclosure section-disclosure">
@@ -149,21 +169,24 @@ export function ScienceView({ manifest, pois, weather }: { manifest: Manifest; p
         <div className="table-wrap">
           <table className="data-table">
             <thead>
-              <tr><th>#</th><th>Name</th><th>Type</th><th>Campaign</th><th>Sealed</th><th>Core</th><th>Lat</th><th>Lon</th><th>Rover elev.</th><th>Position</th></tr>
+              <tr><th>#</th><th>Name</th><th>NASA type</th><th>Campaign</th><th>Sealed</th><th>Core</th><th>Lat</th><th>Lon</th><th>Rover elev.</th><th>Position</th></tr>
             </thead>
             <tbody>
               {samples.map((s) => (
                 <tr key={s.id}>
                   <td>{s.number}</td>
                   <td>{s.name}</td>
-                  <td>{s.type}</td>
+                  <td>{nasaType(s.type)}{s.type !== nasaType(s.type) && <span className="dd-note">{s.type?.replace(/^Rock core \(|\)$/g, "")} (campaign summary)</span>}</td>
                   <td>{s.campaign}</td>
                   <td>Sol {s.sol_sealed} · {s.date_sealed}</td>
                   <td>{s.core_length_cm ? `${s.core_length_cm} cm` : "—"}</td>
                   <td>{s.lat.toFixed(5)}</td>
                   <td>{s.lon.toFixed(5)}</td>
                   <td>{s.elev_geoid_m ? `${s.elev_geoid_m.toFixed(1)} m` : "—"}</td>
-                  <td><KindBadge kind="estimated" title={s.position_method} /></td>
+                  <td>
+                    <KindBadge kind="estimated" title={s.position_method} />
+                    {sampleCheck(photos, s.id)?.corroborated && <span className="dd-note">corroborated by sealing-sol image metadata</span>}
+                  </td>
                 </tr>
               ))}
             </tbody>

@@ -212,6 +212,381 @@
    "kind": "real",
    "source": "meda_weather",
    "latest_sol": 1133
+  },
+  "photos": {
+   "file": "photos.json",
+   "kind": "real",
+   "source": "m2020_raw_images",
+   "count": 282,
+   "geolocated": 281
+  },
+  "geologic_units": {
+   "file": "geology_units.geojson",
+   "kind": "real",
+   "source": "usgs_sim3464",
+   "count": 22,
+   "units": 6
+  },
+  "minerals": {
+   "file": "crism_indicators.png",
+   "bounds": [
+    [
+     18.420113421071857,
+     77.34
+    ],
+    [
+     18.51,
+     77.4699711343961
+    ]
+   ],
+   "kind": "real-derived",
+   "source": "crism_mtrdr",
+   "resolution_m": 18,
+   "products": [
+    {
+     "product_id": "FRT000047A3_07_SR166J_MTR3",
+     "observation_id": "FRT000047A3",
+     "start_time": "2007-02-26T04:34:15.930",
+     "url": "https://pds-geosciences.wustl.edu/mro/mro-m-crism-5-rdr-mptargeted-v1/mrocr_4001/mtrdr/2007/2007_057/frt000047a3/frt000047a3_07_sr166j_mtr3.img",
+     "label_url": "https://pds-geosciences.wustl.edu/mro/mro-m-crism-5-rdr-mptargeted-v1/mrocr_4001/mtrdr/2007/2007_057/frt000047a3/frt000047a3_07_sr166j_mtr3.lbl",
+     "bytes_read": 6098400,
+     "pixels_used": 50444,
+     "registration": {
+      "corr_before": -0.073,
+      "corr_after": 0.873,
+      "shift_px": [
+       17,
+       10
+      ],
+      "accepted": true,
+      "shift_m_north_south": 306,
+      "shift_m_east_west": 171
+     },
+     "footprint": [
+      [
+       77.638963,
+       18.452262
+      ],
+      [
+       77.512763,
+       18.451062
+      ],
+      [
+       77.386663,
+       18.448062
+      ],
+      [
+       77.395163,
+       18.518162
+      ],
+      [
+       77.399363,
+       18.557462
+      ],
+      [
+       77.391263,
+       18.590262
+      ],
+      [
+       77.372763,
+       18.646762
+      ],
+      [
+       77.431163,
+       18.657162
+      ],
+      [
+       77.547863,
+       18.681462
+      ],
+      [
+       77.605463,
+       18.693262
+      ],
+      [
+       77.595363,
+       18.622162
+      ],
+      [
+       77.596063,
+       18.579062
+      ],
+      [
+       77.609763,
+       18.531762
+      ],
+      [
+       77.638963,
+       18.452262
+      ]
+     ]
+    },
+    {
+     "product_id": "FRT0001FB74_07_SR166J_MTR3",
+     "observation_id": "FRT0001FB74",
+     "start_time": "2011-08-14T19:33:12.670",
+     "url": "https://pds-geosciences.wustl.edu/mro/mro-m-crism-5-rdr-mptargeted-v1/mrocr_4001/mtrdr/2011/2011_226/frt0001fb74/frt0001fb74_07_sr166j_mtr3.img",
+     "label_url": "https://pds-geosciences.wustl.edu/mro/mro-m-crism-5-rdr-mptargeted-v1/mrocr_4001/mtrdr/2011/2011_226/frt0001fb74/frt0001fb74_07_sr166j_mtr3.lbl",
+     "bytes_read": 8079104,
+     "pixels_used": 19163,
+     "registration": {
+      "corr_before": 0.019,
+      "corr_after": 0.634,
+      "shift_px": [
+       16,
+       18
+      ],
+      "accepted": true,
+      "shift_m_north_south": 288,
+      "shift_m_east_west": 307
+     },
+     "footprint": [
+      [
+       77.655534,
+       18.275459
+      ],
+      [
+       77.596134,
+       18.275659
+      ],
+      [
+       77.536734,
+       18.275259
+      ],
+      [
+       77.476734,
+       18.275559
+      ],
+      [
+       77.417534,
+       18.274659
+      ],
+      [
+       77.422634,
+       18.333059
+      ],
+      [
+       77.422834,
+       18.363459
+      ],
+      [
+       77.413034,
+       18.394859
+      ],
+      [
+       77.392934,
+       18.450159
+      ],
+      [
+       77.455034,
+       18.466659
+      ],
+      [
+       77.516834,
+       18.483359
+      ],
+      [
+       77.578434,
+       18.500359
+      ],
+      [
+       77.639334,
+       18.516859
+      ],
+      [
+       77.628734,
+       18.438759
+      ],
+      [
+       77.624834,
+       18.390359
+      ],
+      [
+       77.632934,
+       18.346159
+      ],
+      [
+       77.655534,
+       18.275459
+      ]
+     ]
+    },
+    {
+     "product_id": "FRT00005C5E_07_SR166J_MTR3",
+     "observation_id": "FRT00005C5E",
+     "start_time": "2007-05-19T09:30:37.429",
+     "url": "https://pds-geosciences.wustl.edu/mro/mro-m-crism-5-rdr-mptargeted-v1/mrocr_4001/mtrdr/2007/2007_139/frt00005c5e/frt00005c5e_07_sr166j_mtr3.img",
+     "label_url": "https://pds-geosciences.wustl.edu/mro/mro-m-crism-5-rdr-mptargeted-v1/mrocr_4001/mtrdr/2007/2007_139/frt00005c5e/frt00005c5e_07_sr166j_mtr3.lbl",
+     "bytes_read": 8600960,
+     "pixels_used": 52846,
+     "registration": {
+      "corr_before": -0.033,
+      "corr_after": 0.764,
+      "shift_px": [
+       12,
+       10
+      ],
+      "accepted": true,
+      "shift_m_north_south": 216,
+      "shift_m_east_west": 171
+     },
+     "footprint": [
+      [
+       77.555563,
+       18.465844
+      ],
+      [
+       77.490263,
+       18.443844
+      ],
+      [
+       77.425063,
+       18.420944
+      ],
+      [
+       77.360463,
+       18.397844
+      ],
+      [
+       77.295263,
+       18.368444
+      ],
+      [
+       77.305363,
+       18.461144
+      ],
+      [
+       77.309063,
+       18.514944
+      ],
+      [
+       77.298163,
+       18.564844
+      ],
+      [
+       77.275963,
+       18.638844
+      ],
+      [
+       77.339163,
+       18.634944
+      ],
+      [
+       77.404963,
+       18.627344
+      ],
+      [
+       77.533663,
+       18.618744
+      ],
+      [
+       77.523163,
+       18.568544
+      ],
+      [
+       77.520863,
+       18.542844
+      ],
+      [
+       77.531863,
+       18.516344
+      ],
+      [
+       77.555563,
+       18.465844
+      ]
+     ]
+    }
+   ],
+   "registration_method": "Each observation's R770 albedo was correlated with the CTX orthoimage (3x3-averaged to 18 m, band-pass 54-560 m) over integer shifts up to 30 px; the best shift is applied only if r >= 0.3 and the peak is inside the search window.",
+   "indicators": [
+    {
+     "key": "mg_carbonate",
+     "parameter": "MIN2295_2480",
+     "threshold": 0.01,
+     "meaning": "Both the 2.3 and 2.5 µm absorptions are present: consistent with Mg-carbonate (can also respond to some Mg-phyllosilicates).",
+     "color": "#D98EBA",
+     "km2_in_aoi": 0.0
+    },
+    {
+     "key": "fe_ca_carbonate",
+     "parameter": "MIN2345_2537",
+     "threshold": 0.01,
+     "meaning": "Both the 2.35 and 2.54 µm absorptions are present: consistent with Ca/Fe-carbonate.",
+     "color": "#F0B59A",
+     "km2_in_aoi": 0.0
+    },
+    {
+     "key": "olivine",
+     "parameter": "OLINDEX3",
+     "threshold": 0.12,
+     "meaning": "Broad 1 µm absorption shaped like olivine; also raised by Fe-bearing glass or some carbonates.",
+     "color": "#8FD3A7",
+     "km2_in_aoi": 3.381
+    },
+    {
+     "key": "fe_mg_phyllosilicate",
+     "parameter": "D2300",
+     "threshold": 0.015,
+     "meaning": "2.3 µm drop typical of Fe/Mg-OH (e.g. smectite clays); carbonates can raise it too.",
+     "color": "#76C9C2",
+     "km2_in_aoi": 0.077
+    },
+    {
+     "key": "al_oh",
+     "parameter": "BD2210_2",
+     "threshold": 0.01,
+     "meaning": "2.21 µm absorption typical of Al-OH minerals (e.g. Al clays, hydrated silica).",
+     "color": "#9FB8E8",
+     "km2_in_aoi": 0.0
+    },
+    {
+     "key": "hydration",
+     "parameter": "BD1900R2",
+     "threshold": 0.015,
+     "meaning": "1.9 µm water absorption: some hydrated mineral is present.",
+     "color": "#A99BDD",
+     "km2_in_aoi": 0.005
+    },
+    {
+     "key": "low_ca_pyroxene",
+     "parameter": "LCPINDEX2",
+     "threshold": 0.03,
+     "meaning": "1 and 2 µm absorptions typical of low-calcium pyroxene.",
+     "color": "#E6C79C",
+     "km2_in_aoi": 0.0
+    }
+   ],
+   "priority": [
+    "mg_carbonate",
+    "fe_ca_carbonate",
+    "olivine",
+    "fe_mg_phyllosilicate",
+    "al_oh",
+    "low_ca_pyroxene",
+    "hydration"
+   ],
+   "measured_km2": 37.63,
+   "aoi_km2": 38.93,
+   "assumptions": "Thresholds and the 4-of-8 neighbour coherence filter are PAWPRINT assumptions. A coloured pixel is a potential mineral indicator, not a confirmed identification."
+  },
+  "hirise_ortho": {
+   "file": "hirise_ortho.jpg",
+   "bounds": [
+    [
+     18.419995307922363,
+     77.42001056671143
+    ],
+    [
+     18.4649920463562,
+     77.47000694274902
+    ]
+   ],
+   "kind": "real",
+   "source": "trek_hirise_ortho",
+   "zoom": 15,
+   "pixel_deg": 2.1457672119140625e-05,
+   "tiles": 90
   }
  },
  "datasets": {
@@ -293,6 +668,61 @@
    "license": "NASA public release",
    "kind": "real",
    "note": "Names, sols and types transcribed from NASA's sample page. Marker POSITIONS are estimated as the rover's last NASA localization on or before the sealing sol."
+  },
+  "m2020_raw_images": {
+   "title": "Perseverance raw images (Mars Ground View)",
+   "challenge_resource": "Perseverance Raw Images Gallery",
+   "url": "https://mars.nasa.gov/mars2020/multimedia/raw-images/",
+   "api": "https://mars.nasa.gov/rss/api/?feed=raw_images&category=mars2020&feedtype=json&sol=<sol>",
+   "instrument": "Mastcam-Z, Navcam, Hazcams, CacheCam (Mars 2020)",
+   "producer": "NASA/JPL-Caltech (Mastcam-Z: NASA/JPL-Caltech/ASU)",
+   "license": "NASA public release; credit as given per image",
+   "dates": "Images from each sample's sealing sol (2021-2024); feed fetched by build_nasa_extras.py.",
+   "kind": "real",
+   "note": "Raw, unprocessed images. Geolocated only by exact match of the image's site/drive to a NASA localization."
+  },
+  "usgs_sim3464": {
+   "title": "Geologic Map of Jezero Crater and the Nili Planum Region, Mars (SIM 3464)",
+   "challenge_resource": "USGS-NASA Geological Maps",
+   "url": "https://pubs.usgs.gov/publication/sim3464",
+   "service": "https://services.arcgis.com/v01gqwM5QqNysAAi/arcgis/rest/services/Jezero_FeatureServiceFromPro/FeatureServer/8",
+   "producer": "USGS Astrogeology Science Center; authors V.Z. Sun and K.M. Stack (NASA/JPL)",
+   "citation": "Sun, V.Z., and Stack, K.M., 2020, Geologic map of Jezero crater and the Nili Planum region, Mars: U.S. Geological Survey Scientific Investigations Map 3464, pamphlet 14 p., 1 sheet, scale 1:75,000.",
+   "doi": "https://doi.org/10.3133/sim3464",
+   "scale": "1:75,000",
+   "license": "Public domain (USGS)",
+   "dates": "Published 2020.",
+   "kind": "real",
+   "note": "Mapped on a semi-controlled CTX mosaic; USGS states random offsets of about 100-200 m from the Mars 2020 controlled CTX mosaic. Boundaries are approximate here and are not used for routing."
+  },
+  "crism_mtrdr": {
+   "title": "MRO CRISM map-projected targeted reduced data records (MTRDR), refined summary parameters (SR)",
+   "challenge_resource": "NASA PDS / Mars Orbital Data Explorer (Phase 3 requirement)",
+   "url": "https://pds-geosciences.wustl.edu/mro/mro-m-crism-5-rdr-mptargeted-v1/mrocr_4001/mtrdr/",
+   "search": "https://ode.rsl.wustl.edu/mars/ (ODE REST product search, pt=MTRDR)",
+   "instrument": "MRO Compact Reconnaissance Imaging Spectrometer for Mars (CRISM)",
+   "producer": "JHU/APL CRISM team; PDS Geosciences Node (Washington University in St. Louis)",
+   "citation": "Seelos, F.P., et al. (2016) CRISM MTRDR; Viviano-Beck, C.E., et al. (2014) Revised CRISM spectral parameters and summary products, JGR Planets 119, doi:10.1002/2014JE004627.",
+   "resolution_m": 18.0,
+   "license": "NASA PDS public data",
+   "dates": "Observations 2007-02-26 (FRT000047A3), 2007-05-19 (FRT00005C5E), 2011-08-14 (FRT0001FB74).",
+   "kind": "real-derived",
+   "note": "Only the needed summary-parameter bands and AOI rows are read via HTTP range requests."
+  },
+  "trek_hirise_ortho": {
+   "title": "MRO HiRISE, Jezero Mosaic, Controlled (Mars 2020 TRN orthomosaic, 25 cm)",
+   "challenge_resource": "NASA Mars Trek",
+   "url": "https://trek.nasa.gov/mars/",
+   "tiles": "https://trek.nasa.gov/tiles/Mars/EQ/JEZ_hirise_soc_006_orthoMosaic_25cm_Eqc_latTs0_lon0_first_dd/1.0.0/WMTSCapabilities.xml",
+   "instrument": "MRO HiRISE",
+   "producer": "USGS Astrogeology for NASA/JPL Mars 2020 TRN; served by NASA Solar System Treks (JPL)",
+   "citation": "Fergason, R.L., et al. (2020). Mars 2020 Terrain Relative Navigation HiRISE orthorectified image mosaic. USGS Astrogeology.",
+   "doi": "https://doi.org/10.5066/P9QJDP48",
+   "resolution_m": 0.25,
+   "license": "CC0 1.0 (USGS data release page)",
+   "dates": "Product created 2020-08-03 (Mars Trek catalog).",
+   "kind": "real",
+   "note": "Fetched as Mars Trek WMTS tiles at zoom 15 (~1.3 m/px), i.e. downsampled from the 25 cm source."
   }
  },
  "assumptions": {
@@ -327,5 +757,11 @@
   "p05_m": -3.7599120031250095,
   "p95_m": 4.786816468750107,
   "note": "CTX DTM at each rover localization minus the rover's elev_geoid (NASA MMGIS). Rover elevations appear tied to the HiRISE TRN DTM, so this effectively measures CTX-vs-HiRISE agreement along the traverse."
+ },
+ "extras_generated_utc": {
+  "photos": "2026-11-14T21:45:47+00:00",
+  "geologic_units": "2026-11-14T19:43:16+00:00",
+  "minerals": "2026-11-14T21:15:01+00:00",
+  "hirise_ortho": "2026-11-14T19:50:57+00:00"
  }
 }

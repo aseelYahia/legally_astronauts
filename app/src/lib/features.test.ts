@@ -150,7 +150,9 @@ describe("Science missions", () => {
     const r = recommend("sedimentary", pois, landing)[0];
     expect(r.data).toMatch(new RegExp(`NASA sample #${r.poi.number}`));
     expect(r.uncertainty).toMatch(/estimated/);
-    expect(r.uncertainty).toMatch(/no mineral maps/);
+    // NASA's table gives only the coarse type; CRISM indicators exist but are never used to choose targets
+    expect(r.uncertainty).toMatch(/campaign summary/);
+    expect(r.uncertainty).toMatch(/not used to pick targets/);
   });
   it("history mission picks one sample per campaign", () => {
     const h = recommend("history", pois, landing, 20);

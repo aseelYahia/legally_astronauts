@@ -1,9 +1,15 @@
 import L from "leaflet";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { CircleMarker, GeoJSON, ImageOverlay, MapContainer, Marker, Pane, Polyline, Popup, Tooltip, useMap, useMapEvents } from "react-leaflet";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { CircleMarker, GeoJSON, ImageOverlay, MapContainer, Marker, Pane, Polyline, Tooltip, useMap, useMapEvents } from "react-leaflet";
 import { formatLat, formatLon, metersPerDegLon, niceScale } from "../lib/mars";
+import { photoSites, photosForPoi, sampleCheck, type GeologyFile, type MineralsLayer, type PhotosFile } from "../lib/nasaExtras";
 import type { LonLat, Manifest, Poi, RouteResult, Stop, StopRole, TeamSlot } from "../types";
 import { Icon, KindBadge, Term } from "./ui";
+import { PoiLayer } from "./map/PoiLayer";
+import { RouteLayer, type DrawnRoute } from "./map/RouteLayer";
+import { TeamPins } from "./map/TeamPins";
+import { MapPanels, type PanelDef } from "./map/MapPanels";
+import type { WeightedPoint } from "../lib/panelLayout";
 
 /** Mars CRS: map units are planetocentric degrees (y = lat, x = east lon).
  *  The USGS rasters are equidistant-cylindrical, which is exactly linear in
@@ -14,7 +20,7 @@ export const MarsCRS: L.CRS = L.extend({}, L.CRS.Simple, {
   infinite: false,
 });
 
-export type LayerKey = "terrain" | "elevation" | "slope" | "geology" | "rover" | "weather";
+export type LayerKey = "terrain" | "elevation" | "slope" | "geology" | "rover" | "weather" | "hirise_img" | "geomap" | "minerals" | "photos";
 export type PlaceMode = StopRole | null;
 
 interface Props {
@@ -47,13 +53,27 @@ interface Props {
   onTeamSlot?: (poi: Poi, slot: TeamSlot) => void;
   /** Overrides the "Click the map to place the …" label */
   placeLabel?: string;
+  /** NASA data-verification upgrade */
+  geology?: GeologyFile | null;
+  photos?: PhotosFile | null;
+  mineralOpacity?: number;
+  roverMaxSol?: number;
+  onOpenGroundView?: (poiId: string | null) => void;
+  /** Selected route's objective key and label (for route chips) */
+  routeKey?: string;
+  routeLabel?: string;
+  /** Latest weather reading (rendered in a movable map panel) */
+  weather?: ReactNode;
 }
+
+const cameraIcon = L.divIcon({
+  className: "",
+  html: `<div class="cam-pin" aria-hidden="true"><svg viewBox="0 0 24 24" width="15" height="15"><path d="M4 8h3l2-2.5h6L17 8h3a1 1 0 011 1v9a1 1 0 01-1 1H4a1 1 0 01-1-1V9a1 1 0 011-1z" fill="none" stroke="#131522" stroke-width="2"/><circle cx="12" cy="13" r="3.2" fill="none" stroke="#131522" stroke-width="2"/></svg></div>`,
+  iconSize: [24, 24],
+  iconAnchor: [-2, 26],
+});
 
 const ROLE_LABEL: Record<StopRole, string> = { start: "start", waypoint: "waypoint", destination: "destination" };
-
-function teamIcon(who: "A" | "B" | "meet") {
-  return L.divIcon({ className: "", html: `<div class="stop-pin stop-team-${who}"><span></span></div>`, iconSize: [26, 34], iconAnchor: [13, 32] });
-}
 
 const alertIcon = L.divIcon({
   className: "",
@@ -62,13 +82,20 @@ const alertIcon = L.divIcon({
   iconAnchor: [14, 14],
 });
 
-function stopIcon(role: StopRole) {
+function stopIcon(role: StopRole, num?: number) {
   return L.divIcon({
     className: "",
-    html: `<div class="stop-pin stop-${role}"><span></span></div>`,
+    html: `<div class="stop-pin stop-${role}"><span>${num ?? ""}</span></div>`,
     iconSize: [26, 34],
     iconAnchor: [13, 32],
   });
+}
+
+/** NASA's own sample-table wording; the igneous/sedimentary qualifier is a campaign-geology summary. */
+export function nasaType(t?: string) {
+  if (!t) return "";
+  if (t.startsWith("Rock core")) return "Rock Core";
+  return t;
 }
 
 function typeClass(t?: string) {
@@ -105,30 +132,104 @@ function aoiBounds(m: Manifest) {
   return L.latLngBounds([a.lat_min, a.lon_min], [a.lat_max, a.lon_max]);
 }
 
-function Controller({ manifest, flyTarget, onMapClick, onCursor }: Pick<Props, "manifest" | "flyTarget" | "onMapClick" | "onCursor">) {
+const snapDown = (z: number) => Math.floor(z * 4) / 4;
+
+/** Zoom at which the study area is fully visible ("contain") or fills the map ("fill").
+ *  Computed directly (CRS.Simple: 2^zoom pixels per degree) because Leaflet's getBoundsZoom
+ *  clamps to the current minZoom, which would stop the limit from ever coming back down. */
+export function aoiZooms(size: { x: number; y: number }, m: Manifest) {
+  const a = m.aoi;
+  const kx = size.x / (a.lon_max - a.lon_min);
+  const ky = size.y / (a.lat_max - a.lat_min);
+  return { contain: Math.log2(Math.min(kx, ky)), fill: Math.log2(Math.max(kx, ky)) };
+}
+
+/** Zoom limits that depend on the visible map size: never zoom out past the point where the whole study
+ *  area is visible, and keep panning inside the data. Bounds are the real AOI; imagery is never stretched. */
+export function applyViewLimits(map: L.Map, manifest: Manifest) {
+  const b = aoiBounds(manifest);
+  const size = map.getSize();
+  if (size.x < 50 || size.y < 50) return;
+  const contain = snapDown(aoiZooms(size, manifest).contain);
+  map.setMinZoom(contain);
+  map.setMaxBounds(b);
+  if (map.getZoom() < contain) map.setZoom(contain, { animate: false });
+}
+
+/** Default framing: fill the map area with terrain (no empty margins), centred between the delta front and
+ *  the landing site. */
+export function resetView(map: L.Map, manifest: Manifest, animate = true) {
+  const a = manifest.aoi;
+  const b = aoiBounds(manifest);
+  const fill = Math.ceil(aoiZooms(map.getSize(), manifest).fill * 4) / 4;
+  const center = L.latLng(a.lat_min + 0.42 * (a.lat_max - a.lat_min), a.lon_min + 0.6 * (a.lon_max - a.lon_min));
+  if (animate) map.flyTo(center, fill, { duration: 0.6 });
+  else map.setView(center, fill, { animate: false });
+  map.once("moveend", () => map.panInsideBounds(b, { animate: false }));
+  if (!animate) map.panInsideBounds(b, { animate: false });
+}
+
+function Controller({ manifest, flyTarget, onMapClick, onCursor, fit }: Pick<Props, "manifest" | "flyTarget" | "onMapClick" | "onCursor"> & { fit: L.LatLngBounds | null }) {
   const map = useMap();
   const fitted = useRef(false);
+  const touched = useRef(false); // has the user moved the map yet?
+  const lastSize = useRef<L.Point | null>(null);
   useEffect(() => {
-    if (fitted.current) return;
-    fitted.current = true;
-    const a = manifest.aoi;
-    const b = aoiBounds(manifest);
-    // Fill the frame with real terrain, framed between the delta front and the landing site,
-    // then nudge the view so no empty space outside the data area shows.
-    const z = map.getBoundsZoom(b, true);
-    map.setView([a.lat_min + 0.42 * (a.lat_max - a.lat_min), a.lon_min + 0.6 * (a.lon_max - a.lon_min)], z, { animate: false });
-    map.panInsideBounds(b, { animate: false });
-  }, [map, manifest]);
-  useEffect(() => {
-    if (flyTarget) map.flyTo([flyTarget.lat, flyTarget.lon], flyTarget.zoom ?? Math.max(map.getZoom(), 14.5), { duration: 0.8 });
-  }, [map, flyTarget]);
-  // Keep Leaflet in sync when panels, drawers or the mobile sheet resize the map.
-  useEffect(() => {
+    const mark = () => (touched.current = true);
     const el = map.getContainer();
-    const ro = new ResizeObserver(() => map.invalidateSize({ animate: false }));
+    const unmark = () => (touched.current = false);
+    map.on("dragstart usertouch", mark);
+    map.on("userreset", unmark);
+    el.addEventListener("wheel", mark, { passive: true });
+    el.addEventListener("touchstart", mark, { passive: true });
+    el.addEventListener("dblclick", mark);
+    return () => {
+      map.off("dragstart usertouch", mark);
+      map.off("userreset", unmark);
+      el.removeEventListener("wheel", mark);
+      el.removeEventListener("touchstart", mark);
+      el.removeEventListener("dblclick", mark);
+    };
+  }, [map]);
+  useEffect(() => {
+    const init = () => {
+      if (fitted.current) return;
+      const sz = map.getSize();
+      if (sz.x < 50 || sz.y < 50) return; // wait for layout
+      fitted.current = true;
+      applyViewLimits(map, manifest);
+      resetView(map, manifest, false);
+    };
+    init();
+    // Keep Leaflet in sync when panels, drawers or the mobile sheet resize the map, and recompute limits.
+    const el = map.getContainer();
+    const ro = new ResizeObserver(() => {
+      map.invalidateSize({ animate: false });
+      const sz = map.getSize();
+      if (lastSize.current && lastSize.current.equals(sz)) return;
+      lastSize.current = sz;
+      if (!fitted.current) return init();
+      const wasAtMin = map.getZoom() <= map.getMinZoom() + 0.01;
+      applyViewLimits(map, manifest);
+      if (!touched.current) return resetView(map, manifest, false); // keep the default framing until the user takes over
+      if (wasAtMin) map.setZoom(map.getMinZoom(), { animate: false });
+      map.panInsideBounds(aoiBounds(manifest), { animate: false });
+    });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [map]);
+  }, [map, manifest]);
+  useEffect(() => {
+    if (flyTarget) touched.current = true;
+    if (flyTarget) map.flyTo([flyTarget.lat, flyTarget.lon], flyTarget.zoom ?? Math.max(map.getZoom(), 14.5), { duration: 0.8 });
+  }, [map, flyTarget]);
+  // New route result: frame it, leaving room for the map furniture.
+  const lastFit = useRef<L.LatLngBounds | null>(null);
+  useEffect(() => {
+    if (!fit || (lastFit.current && lastFit.current.equals(fit, 1e-9))) return;
+    lastFit.current = fit;
+    touched.current = true;
+    if (fitted.current) map.flyToBounds(fit, { paddingTopLeft: [60, 70], paddingBottomRight: [80, 70], maxZoom: 16, duration: 0.7 });
+  }, [map, fit]);
   useMapEvents({
     click: (e) => onMapClick(e.latlng.lng, e.latlng.lat),
     mousemove: (e) => onCursor([e.latlng.lng, e.latlng.lat]),
@@ -137,7 +238,29 @@ function Controller({ manifest, flyTarget, onMapClick, onCursor }: Pick<Props, "
   return null;
 }
 
-function MapButtons({ manifest }: { manifest: Manifest }) {
+/** Hands the Leaflet map to the panel layer, which lives outside MapContainer. */
+function MapGrab({ onMap }: { onMap: (m: L.Map) => void }) {
+  const map = useMap();
+  useEffect(() => onMap(map), [map, onMap]);
+  return null;
+}
+
+/** Tablet and phone widths get a compact info sheet instead of floating, draggable panels. */
+function useCompact(query = "(max-width: 1024px)") {
+  const get = () => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia(query).matches;
+  const [m, setM] = useState(get);
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const mq = window.matchMedia(query);
+    const on = () => setM(mq.matches);
+    mq.addEventListener("change", on);
+    on();
+    return () => mq.removeEventListener("change", on);
+  }, [query]);
+  return m;
+}
+
+function MapButtons({ manifest, fit }: { manifest: Manifest; fit: L.LatLngBounds | null }) {
   const map = useMap();
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -148,11 +271,16 @@ function MapButtons({ manifest }: { manifest: Manifest }) {
   }, []);
   return (
     <div className="map-buttons" ref={ref}>
-      <button aria-label="Zoom in" title="Zoom in" onClick={() => map.zoomIn(0.5)}><Icon name="plus" /></button>
-      <button aria-label="Zoom out" title="Zoom out" onClick={() => map.zoomOut(0.5)}><Icon name="minus" /></button>
-      <button aria-label="Show the whole area" title="Show the whole area" className="sep" onClick={() => map.flyToBounds(aoiBounds(manifest), { duration: 0.6 })}>
+      <button aria-label="Zoom in" title="Zoom in" onClick={() => { map.fire("usertouch"); map.zoomIn(0.5); }}><Icon name="plus" /></button>
+      <button aria-label="Zoom out" title="Zoom out" onClick={() => { map.fire("usertouch"); map.zoomOut(0.5); }}><Icon name="minus" /></button>
+      <button aria-label="Reset view" title="Reset view: show the study area" className="sep" onClick={() => { resetView(map, manifest); map.fire("userreset"); }}>
         <Icon name="target" />
       </button>
+      {fit && (
+        <button aria-label="Fit route" title="Zoom to the planned route" onClick={() => map.flyToBounds(fit, { paddingTopLeft: [60, 70], paddingBottomRight: [80, 70], maxZoom: 16, duration: 0.6 })}>
+          <Icon name="route" />
+        </button>
+      )}
     </div>
   );
 }
@@ -185,35 +313,136 @@ function ScaleBar() {
 export function MapView(props: Props) {
   const { manifest, pois, rover, layers, opacity, stops, route, hoverIndex, placeMode, flyTarget, onMapClick, onCursor, onPoiAction, onPlanTo, planning, hint } = props;
   const routeColor = props.routeColor ?? "#76C9C2";
-  const ll = (r: RouteResult) => r.path_lonlat.map(([x, y]) => [y, x] as [number, number]);
   const a = manifest.aoi;
-  const maxBounds = useMemo(() => L.latLngBounds([a.lat_min - 0.02, a.lon_min - 0.03], [a.lat_max + 0.02, a.lon_max + 0.03]), [a]);
   const L_ = manifest.layers;
-  const routeLatLngs = useMemo(() => route?.path_lonlat.map(([x, y]) => [y, x] as [number, number]) ?? [], [route]);
   const hoverPt = hoverIndex !== null && route ? route.path_lonlat[hoverIndex] : null;
   const legend = L_.elevation.legend as { min_m: number; max_m: number };
   const hb = L_.hirise_elevation?.bounds;
   const icons = useMemo(() => Object.fromEntries(pois.map((p) => [p.id, poiIcon(p, planning)])), [pois, planning]);
+  // bounds of whatever was just planned, so the map can frame it (new object only when the route changes)
+  const fit = useMemo(() => {
+    const pts = [...(route?.path_lonlat ?? []), ...(props.teamRoutes ?? []).flatMap((t) => t.route.path_lonlat)];
+    return pts.length > 1 ? L.latLngBounds(pts.map(([x, y]) => [y, x] as [number, number])) : null;
+  }, [route, props.teamRoutes]);
+  const drawn: DrawnRoute[] = useMemo(
+    () => [
+      ...(props.altRoutes ?? []).map((r) => ({ key: r.key, label: r.label, route: r.route, color: r.color, role: "alternative" as const })),
+      ...(route ? [{ key: props.routeKey ?? "selected", label: props.routeLabel ?? "Selected", route, color: routeColor, role: "selected" as const }] : []),
+      ...(props.teamRoutes ?? []).map((t) => ({ key: t.key, label: t.label, route: t.route, color: t.color, dash: t.dash, role: (t.dash ? "return" : t.key === "A" ? "teamA" : "teamB") as DrawnRoute["role"] })),
+    ],
+    [props.altRoutes, props.teamRoutes, route, routeColor, props.routeKey, props.routeLabel],
+  );
+  const maxSol = props.roverMaxSol ?? Infinity;
+  const roverShown = useMemo(
+    () => ({ ...rover, features: rover.features.filter((f) => ((f.properties as { sol?: number } | null)?.sol ?? 0) <= maxSol) }),
+    [rover, maxSol],
+  );
+  const sites = useMemo(() => photoSites(props.photos ?? null, maxSol), [props.photos, maxSol]);
+  const minerals = L_.minerals as unknown as MineralsLayer | undefined;
+  const unitColor = useMemo(() => Object.fromEntries((props.geology?.units ?? []).map((u) => [u.symbol, u])), [props.geology]);
+
+  /* ---- movable information panels (screen space only; never touch map coordinates) ---- */
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [leaflet, setLeaflet] = useState<L.Map | null>(null);
+  const compact = useCompact();
+  // what the panels should keep clear of, in map-container pixels: stops and routes matter most
+  const avoidPoints = useCallback((): WeightedPoint[] => {
+    if (!leaflet) return [];
+    const out: WeightedPoint[] = [];
+    const at = (lat: number, lon: number, w: number) => {
+      const p = leaflet.latLngToContainerPoint([lat, lon]);
+      out.push({ x: p.x, y: p.y, w });
+    };
+    if (layers.geology) for (const p of pois) at(p.lat, p.lon, p.category === "landing" ? 2 : 1.5);
+    for (const d of drawn) {
+      const w = d.role === "alternative" ? 1.5 : 3;
+      for (const [x, y] of d.route.path_lonlat) at(y, x, w);
+    }
+    for (const s of stops) at(s.lat, s.lon, 6);
+    for (const t of props.teamPins ?? []) at(t.at[1], t.at[0], 6);
+    for (const m of props.alertMarkers ?? []) at(m.at[1], m.at[0], 5);
+    return out;
+  }, [leaflet, layers.geology, pois, drawn, stops, props.teamPins, props.alertMarkers]);
+  const placeKey = `${drawn.map((d) => `${d.key}:${d.route.path_lonlat.length}`).join(",")}|${stops.map((s) => s.id).join(",")}|${(props.teamPins ?? []).map((t) => t.key).join(",")}`;
+  const hintText = placeMode ? (props.placeLabel ? `Click the map to place ${props.placeLabel}` : `Click the map to place the ${ROLE_LABEL[placeMode]}`) : hint;
+  const panels: PanelDef[] = [
+    {
+      id: "title",
+      label: "Location title",
+      short: "Jezero",
+      chipIcon: <Icon name="pin" size={13} />,
+      content: (
+        <div className="map-title">
+          <h2>Jezero Crater</h2>
+          <span>Mars · 18.4° N, 77.4° E</span>
+        </div>
+      ),
+    },
+    ...(props.weather
+      ? [{ id: "weather" as const, label: "Mars weather (archived NASA reading)", short: "Weather", chipIcon: <Icon name="cloud" size={13} />, content: <div className="wx-chip">{props.weather}</div> }]
+      : []),
+    ...(layers.elevation
+      ? [
+          {
+            id: "legend" as const,
+            label: "Elevation legend",
+            short: "Legend",
+            chipIcon: <span className="mp-ramp" aria-hidden="true" />,
+            content: (
+              <div className="legend">
+                <div className="legend-title">
+                  <Term k="elevation" /> (m, <Term k="areoid">areoid</Term>)
+                </div>
+                <div className="legend-ramp" />
+                <div className="legend-ticks">
+                  {[0, 0.25, 0.5, 0.75, 1].map((t) => (
+                    <span key={t}>{Math.round(legend.min_m + t * (legend.max_m - legend.min_m)).toLocaleString("en-US")}</span>
+                  ))}
+                </div>
+              </div>
+            ),
+          },
+        ]
+      : []),
+    {
+      id: "hint",
+      label: "Map instructions",
+      short: "Tips",
+      chipIcon: <Icon name={placeMode ? "pin" : "info"} size={13} />,
+      className: placeMode ? `tone-${placeMode}` : "",
+      // the placement instruction is shown even if the instructions panel was minimized
+      forceOpen: !!placeMode,
+      liveText: hintText,
+      content: (
+        <div className={`map-hint ${placeMode ? `placing-${placeMode}` : ""}`} role="status">
+          <Icon name={placeMode ? "pin" : "info"} size={14} />
+          {hintText}
+        </div>
+      ),
+    },
+  ];
 
   return (
-    <div className={`map-wrap ${placeMode ? "placing" : ""}`}>
+    <div ref={wrapRef} className={`map-wrap ${placeMode ? "placing" : planning ? "planning" : "inspecting"} ${compact ? "panels-compact" : ""}`}>
       <MapContainer
         crs={MarsCRS}
         center={[(a.lat_min + a.lat_max) / 2, (a.lon_min + a.lon_max) / 2]}
         zoom={13}
-        minZoom={11.5}
+        minZoom={10}
         maxZoom={17}
         zoomSnap={0.25}
         zoomDelta={0.5}
-        maxBounds={maxBounds}
-        maxBoundsViscosity={0.8}
+        wheelPxPerZoomLevel={90}
+        maxBoundsViscosity={1}
         zoomControl={false}
         attributionControl={false}
         className="map"
       >
-        <Controller manifest={manifest} flyTarget={flyTarget} onMapClick={onMapClick} onCursor={onCursor} />
+        <MapGrab onMap={setLeaflet} />
+        <Controller manifest={manifest} flyTarget={flyTarget} onMapClick={onMapClick} onCursor={onCursor} fit={fit} />
         <Pane name="terrain" style={{ zIndex: 200 }}>
           {layers.terrain && L_.terrain.bounds && <ImageOverlay url={`/data/${L_.terrain.file}`} bounds={L_.terrain.bounds} />}
+          {layers.hirise_img && L_.hirise_ortho?.bounds && <ImageOverlay url={`/data/${L_.hirise_ortho.file}`} bounds={L_.hirise_ortho.bounds} />}
         </Pane>
         <Pane name="elevation" style={{ zIndex: 210 }}>
           {layers.elevation && L_.elevation.bounds && (
@@ -232,6 +461,34 @@ export function MapView(props: Props) {
             <ImageOverlay url={`/data/${L_.hirise_slope.file}`} bounds={L_.hirise_slope.bounds} opacity={Math.min(1, opacity + 0.15)} />
           )}
         </Pane>
+        {layers.geomap && props.geology && (
+          <Pane name="geomap" style={{ zIndex: 236 }}>
+            <GeoJSON
+              key={`geo-${opacity}`}
+              data={props.geology}
+              style={(f) => {
+                const u = unitColor[(f?.properties as { symbol: string }).symbol];
+                return { color: u?.color ?? "#F1EDF5", weight: 1.4, opacity: 0.95, fillColor: u?.color ?? "#F1EDF5", fillOpacity: 0.28 * opacity + 0.06 };
+              }}
+              onEachFeature={(f, layer) => {
+                const u = unitColor[(f.properties as { symbol: string }).symbol];
+                layer.bindTooltip(`<b>${u?.symbol ?? ""}</b> · ${u?.name ?? ""}<br/><span>USGS SIM 3464 · boundary approximate (±100–200 m)</span>`, { sticky: true, className: "map-tip geo-tip" });
+              }}
+            />
+          </Pane>
+        )}
+        {layers.minerals && minerals?.bounds && (
+          <Pane name="minerals" style={{ zIndex: 238 }}>
+            <ImageOverlay url={`/data/${minerals.file}`} bounds={minerals.bounds} opacity={props.mineralOpacity ?? 0.85} className="pixelated" />
+            {minerals.products.map((p) =>
+              p.footprint ? (
+                <Polyline key={p.product_id} positions={p.footprint.map(([x, y]) => [y, x] as [number, number])} pathOptions={{ color: "#F1EDF5", weight: 1.2, dashArray: "2 6", opacity: 0.8 }}>
+                  <Tooltip sticky className="map-tip">CRISM {p.observation_id} footprint · observed {p.start_time.slice(0, 10)}</Tooltip>
+                </Polyline>
+              ) : null,
+            )}
+          </Pane>
+        )}
         {hb && (layers.elevation || layers.slope) && (
           <Pane name="hirise-frame" style={{ zIndex: 240 }}>
             <Polyline
@@ -244,14 +501,15 @@ export function MapView(props: Props) {
               ]}
               pathOptions={{ color: "#F1EDF5", weight: 1.2, dashArray: "5 5", opacity: 0.75 }}
             >
-              <Tooltip sticky className="map-tip">HiRISE 1 m detail area · routes fully inside use sharper 4 m terrain</Tooltip>
+              <Tooltip sticky className="map-tip">HiRISE detail area (1 m DTM) · routes fully inside use a 4 m grid derived from it</Tooltip>
             </Polyline>
           </Pane>
         )}
         {layers.rover && (
           <Pane name="rover" style={{ zIndex: 400 }}>
             <GeoJSON
-              data={rover}
+              key={`rover-${maxSol}`}
+              data={roverShown}
               style={() => ({ color: "#F1EDF5", weight: 2.2, opacity: 0.8, dashArray: "1 5", lineCap: "round" })}
               onEachFeature={(f, layer) =>
                 layer.bindTooltip(`Perseverance drive · sol ${(f.properties as { sol: number }).sol}`, { sticky: true, className: "map-tip" })
@@ -260,35 +518,15 @@ export function MapView(props: Props) {
           </Pane>
         )}
         <Pane name="route" style={{ zIndex: 450 }}>
-          {props.altRoutes?.map((a) => (
-            <Polyline key={a.key} positions={ll(a.route)} pathOptions={{ color: a.color, weight: 3, opacity: 0.85, dashArray: a.dash ?? "6 6", lineCap: "round" }}>
-              <Tooltip sticky className="map-tip">{a.label} option · click Compare in the planner to select it</Tooltip>
-            </Polyline>
-          ))}
-          {props.teamRoutes?.map((t) => (
-            <Fragment key={t.key}>
-              <Polyline positions={ll(t.route)} pathOptions={{ color: "#131522", weight: 7, opacity: 0.35, interactive: false }} />
-              <Polyline positions={ll(t.route)} pathOptions={{ color: t.color, weight: t.dash ? 2.5 : 3.5, opacity: t.dash ? 0.9 : 1, dashArray: t.dash }}>
-                <Tooltip sticky className="map-tip">{t.label}</Tooltip>
-              </Polyline>
-            </Fragment>
-          ))}
-          {routeLatLngs.length > 1 && (
-            <>
-              <Polyline positions={routeLatLngs} pathOptions={{ color: "#131522", weight: 7, opacity: 0.35, interactive: false }} />
-              <Polyline positions={routeLatLngs} pathOptions={{ color: routeColor, weight: 4, opacity: 1, interactive: false }} />
-            </>
-          )}
-          {route && route.path_lonlat.filter((_, i) => i % Math.max(1, Math.floor(route.path_lonlat.length / 8)) === 0 && i > 0).map(([x, y], i) => (
-            <CircleMarker key={i} center={[y, x]} radius={3} pathOptions={{ color: "#F1EDF5", fillColor: routeColor, fillOpacity: 1, weight: 1.5, interactive: false }} />
-          ))}
+          <RouteLayer routes={drawn} />
           {hoverPt && <CircleMarker center={[hoverPt[1], hoverPt[0]]} radius={7} pathOptions={{ color: "#F1EDF5", fillColor: "#D98EBA", fillOpacity: 1, weight: 2 }} />}
         </Pane>
-        {layers.geology &&
-          pois.map((p) => (
-            <Marker key={p.id} position={[p.lat, p.lon]} icon={icons[p.id]} riseOnHover>
-              <Popup className="poi-popup" maxWidth={290} autoPanPaddingTopLeft={[20, 84]} autoPanPaddingBottomRight={[70, 90]}>
-                <div className="popup">
+        {layers.geology && (
+          <PoiLayer
+            pois={pois}
+            icons={icons}
+            body={(p) => (
+              <div className="popup">
                   <div className="popup-title">
                     {p.number ? <span className="num">#{p.number}</span> : null}
                     {p.name}
@@ -299,7 +537,7 @@ export function MapView(props: Props) {
                   </div>
                   {p.category === "sample" ? (
                     <dl>
-                      <dt>Type</dt><dd>{p.type}</dd>
+                      <dt>Type</dt><dd>{p.type}<span className="dd-note">NASA's table: {nasaType(p.type)}</span></dd>
                       <dt>Campaign</dt><dd>{p.campaign}</dd>
                       <dt>Sealed</dt><dd><Term k="sol">Sol</Term> {p.sol_sealed} · {p.date_sealed}</dd>
                       {p.core_length_cm ? (<><dt>Core length</dt><dd>{p.core_length_cm} cm</dd></>) : null}
@@ -308,7 +546,17 @@ export function MapView(props: Props) {
                   ) : (
                     <p className="popup-desc">{p.description}</p>
                   )}
-                  {p.position_method && <p className="popup-note">{p.position_method}</p>}
+                  {p.position_method && (
+                    <p className="popup-note">
+                      {p.position_method}
+                      {sampleCheck(props.photos ?? null, p.id)?.corroborated ? ". NASA images from the sealing sol were taken at this same localization." : ""}
+                    </p>
+                  )}
+                  {photosForPoi(props.photos ?? null, p.id).length > 0 && props.onOpenGroundView && (
+                    <button className="btn-mini lav gv-open" onClick={thenClose(() => props.onOpenGroundView?.(p.id))}>
+                      <Icon name="camera" size={13} /> Ground View · {photosForPoi(props.photos ?? null, p.id).length} NASA photos
+                    </button>
+                  )}
                   {planning && props.teamMode ? (
                     <>
                       <div className="popup-q">Use this spot for the team:</div>
@@ -337,8 +585,19 @@ export function MapView(props: Props) {
                     </div>
                   )}
                 </div>
-              </Popup>
-            </Marker>
+            )}
+          />
+        )}
+        {layers.photos &&
+          sites.map((s) => (
+            <Fragment key={s.rmc}>
+              <CircleMarker center={[s.lat, s.lon]} radius={2.5} pathOptions={{ color: "#131522", fillColor: "#E6C79C", fillOpacity: 1, weight: 1, interactive: false }} />
+              <Marker position={[s.lat, s.lon]} icon={cameraIcon} zIndexOffset={600} eventHandlers={{ click: () => props.onOpenGroundView?.(s.photos[0].poi_id) }}>
+                <Tooltip direction="top" offset={[10, -26]} className="map-tip">
+                  {s.photos.length} NASA photo{s.photos.length > 1 ? "s" : ""} · rover localization {s.rmc} · sol {s.photos[0].sol}
+                </Tooltip>
+              </Marker>
+            </Fragment>
           ))}
         {props.alertMarkers?.map((a) => (
           <Marker key={a.key} position={[a.at[1], a.at[0]]} icon={alertIcon} zIndexOffset={900}>
@@ -348,49 +607,27 @@ export function MapView(props: Props) {
             </Tooltip>
           </Marker>
         ))}
-        {props.teamPins?.map((t) => (
-          <Marker key={t.key} position={[t.at[1], t.at[0]]} icon={teamIcon(t.who)} zIndexOffset={1000} interactive={false}>
-            <Tooltip permanent direction="auto" offset={[0, -18]} className={`stop-label label-team-${t.who}`}>
-              {t.label}
-            </Tooltip>
-          </Marker>
-        ))}
-        {stops.map((s) => (
-          <Marker key={s.id} position={[s.lat, s.lon]} icon={stopIcon(s.role)} zIndexOffset={1000} interactive={false}>
+        {props.teamPins && props.teamPins.length > 0 && <TeamPins pins={props.teamPins} />}
+        {[...stops.filter((s) => s.role === "start"), ...stops.filter((s) => s.role === "waypoint"), ...stops.filter((s) => s.role === "destination")].map((s, i, all) => (
+          <Marker key={s.id} position={[s.lat, s.lon]} icon={stopIcon(s.role, all.length > 1 ? i + 1 : undefined)} zIndexOffset={1000} interactive={false}>
             <Tooltip permanent direction="auto" offset={[0, -18]} className={`stop-label label-${s.role}`}>
-              {s.name}
+              {all.length > 1 ? `${i + 1} · ` : ""}{s.name}
             </Tooltip>
           </Marker>
         ))}
-        <MapButtons manifest={manifest} />
+        <MapButtons manifest={manifest} fit={fit} />
         <ScaleBar />
       </MapContainer>
 
-      <div className="map-title">
-        <h2>Jezero Crater</h2>
-        <span>Mars · 18.4° N, 77.4° E</span>
+      <MapPanels map={leaflet} wrapRef={wrapRef} panels={panels} points={avoidPoints} placeKey={placeKey} compact={compact} />
+
+      <div className="credit">
+        CTX: NASA/JPL/MSSS · HiRISE: NASA/JPL/UArizona · DTMs: USGS Astrogeology · Traverse: NASA/JPL-Caltech
+        {layers.hirise_img && " · HiRISE mosaic via NASA Mars Trek"}
+        {layers.geomap && " · Geology: USGS SIM 3464 (Sun & Stack 2020)"}
+        {layers.minerals && " · CRISM: NASA/JHU-APL, PDS Geosciences"}
+        {layers.photos && " · Photos: NASA/JPL-Caltech"}
       </div>
-
-      {layers.elevation && (
-        <div className="legend">
-          <div className="legend-title">
-            <Term k="elevation" /> (m, <Term k="areoid">areoid</Term>)
-          </div>
-          <div className="legend-ramp" />
-          <div className="legend-ticks">
-            {[0, 0.25, 0.5, 0.75, 1].map((t) => (
-              <span key={t}>{Math.round(legend.min_m + t * (legend.max_m - legend.min_m)).toLocaleString("en-US")}</span>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <div className={`map-hint ${placeMode ? `placing-${placeMode}` : ""}`} role="status">
-        <Icon name={placeMode ? "pin" : "info"} size={14} />
-        {placeMode ? (props.placeLabel ? `Click the map to place ${props.placeLabel}` : `Click the map to place the ${ROLE_LABEL[placeMode]}`) : hint}
-      </div>
-
-      <div className="credit">CTX: NASA/JPL/MSSS · HiRISE: NASA/JPL/UArizona · DTMs: USGS Astrogeology · Traverse: NASA/JPL-Caltech</div>
     </div>
   );
 }

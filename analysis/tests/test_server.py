@@ -106,3 +106,19 @@ def test_terrain_point(base_url):
     with urllib.request.urlopen(base_url + "/api/terrain?lon=77.4509&lat=18.4446") as r:
         d = json.loads(r.read())
     assert -2600 < d["samples"]["ctx"]["elevation_m"] < -2540  # rover measured -2569.9 m here
+
+
+def test_api_refuses_to_share_its_port():
+    """A second API on the same port must fail loudly (Windows SO_REUSEADDR would otherwise let both bind)."""
+    import socket
+
+    import server
+
+    first = server.ExclusiveHTTPServer(("127.0.0.1", 0), server.Handler)
+    try:
+        port = first.server_address[1]
+        with pytest.raises(OSError):
+            server.ExclusiveHTTPServer(("127.0.0.1", port), server.Handler)
+        assert first.socket.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR) == 0
+    finally:
+        first.server_close()

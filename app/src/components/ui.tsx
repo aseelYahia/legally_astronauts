@@ -175,6 +175,9 @@ export function Icon({ name, size = 18 }: { name: string; size?: number }) {
     gauge: <><path d="M4 18a8 8 0 1116 0" /><path d="M12 18l4-6" /></>,
     distance: <><path d="M3 12h18M7 8l-4 4 4 4M17 8l4 4-4 4" /></>,
     mountain: <><path d="M3 19l6-10 4 6 2-3 6 7z" /></>,
+    camera: <><path d="M4 8h3l2-2.5h6L17 8h3a1 1 0 011 1v9a1 1 0 01-1 1H4a1 1 0 01-1-1V9a1 1 0 011-1z" /><circle cx="12" cy="13" r="3.5" /></>,
+    link: <><path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1-1" /></>,
+    clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
   };
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
