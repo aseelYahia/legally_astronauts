@@ -1,0 +1,284 @@
+import L from "leaflet";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { CircleMarker, GeoJSON, ImageOverlay, MapContainer, Marker, Pane, Polyline, Popup, Tooltip, useMap, useMapEvents } from "react-leaflet";
+import { formatLat, formatLon, metersPerDegLon, niceScale } from "../lib/mars";
+import type { LonLat, Manifest, Poi, RouteResult, Stop, StopRole } from "../types";
+import { Icon, KindBadge } from "./ui";
+
+/** Mars CRS: map units are planetocentric degrees (y = lat, x = east lon).
+ *  The USGS rasters are equidistant-cylindrical, which is exactly linear in
+ *  lon/lat, so image overlays line up without reprojection. Distances are
+ *  computed on the Mars sphere elsewhere, never with Leaflet's Euclidean metric. */
+export const MarsCRS: L.CRS = L.extend({}, L.CRS.Simple, {
+  transformation: new L.Transformation(1, 0, -1, 0),
+  infinite: false,
+});
+
+export type LayerKey = "terrain" | "elevation" | "slope" | "geology" | "rover" | "weather";
+export type PlaceMode = StopRole | null;
+
+interface Props {
+  manifest: Manifest;
+  pois: Poi[];
+  rover: GeoJSON.FeatureCollection;
+  layers: Record<LayerKey, boolean>;
+  opacity: number;
+  stops: Stop[];
+  route: RouteResult | null;
+  hoverIndex: number | null;
+  placeMode: PlaceMode;
+  flyTarget: { lon: number; lat: number; zoom?: number; key: number } | null;
+  onMapClick: (lon: number, lat: number) => void;
+  onCursor: (ll: LonLat | null) => void;
+  onPoiAction: (poi: Poi, role: StopRole) => void;
+  planning: boolean;
+}
+
+const STOP_COLORS: Record<StopRole, string> = { start: "#2ee6d6", waypoint: "#a78bfa", destination: "#ff4fa3" };
+
+function stopIcon(role: StopRole) {
+  return L.divIcon({
+    className: "",
+    html: `<div class="stop-pin stop-${role}"><span></span></div>`,
+    iconSize: [26, 34],
+    iconAnchor: [13, 32],
+  });
+}
+
+const sampleIcon = (p: Poi, selected: boolean) =>
+  L.divIcon({
+    className: "",
+    html: `<div class="poi-pin ${p.category} ${typeClass(p.type)} ${selected ? "sel" : ""}" title="${p.name}"></div>`,
+    iconSize: [16, 16],
+    iconAnchor: [8, 8],
+  });
+
+function typeClass(t?: string) {
+  if (!t) return "";
+  if (t.includes("igneous")) return "igneous";
+  if (t.includes("sedimentary") || t.includes("carbonate")) return "sedimentary";
+  if (t.includes("Regolith")) return "regolith";
+  return "atmo";
+}
+
+function Controller({ manifest, flyTarget, onMapClick, onCursor }: Pick<Props, "manifest" | "flyTarget" | "onMapClick" | "onCursor">) {
+  const map = useMap();
+  const fitted = useRef(false);
+  useEffect(() => {
+    if (fitted.current) return;
+    fitted.current = true;
+    const a = manifest.aoi;
+    // "cover" the frame with the prototype area so the map stays large and central
+    const b = L.latLngBounds([a.lat_min, a.lon_min], [a.lat_max, a.lon_max]);
+    // Frame between the delta front and the landing site (both inside the AOI).
+    const z = (map.getBoundsZoom(b, true) + map.getBoundsZoom(b, false)) / 2;
+    map.setView([a.lat_min + 0.42 * (a.lat_max - a.lat_min), a.lon_min + 0.6 * (a.lon_max - a.lon_min)], z, { animate: false });
+  }, [map, manifest]);
+  useEffect(() => {
+    if (flyTarget) map.flyTo([flyTarget.lat, flyTarget.lon], flyTarget.zoom ?? Math.max(map.getZoom(), 14.5), { duration: 0.8 });
+  }, [map, flyTarget]);
+  useMapEvents({
+    click: (e) => onMapClick(e.latlng.lng, e.latlng.lat),
+    mousemove: (e) => onCursor([e.latlng.lng, e.latlng.lat]),
+    mouseout: () => onCursor(null),
+  });
+  return null;
+}
+
+function MapButtons() {
+  const map = useMap();
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (ref.current) {
+      L.DomEvent.disableClickPropagation(ref.current);
+      L.DomEvent.disableScrollPropagation(ref.current);
+    }
+  }, []);
+  return (
+    <div className="map-buttons" ref={ref}>
+      <button aria-label="Zoom in" onClick={() => map.zoomIn(0.5)}><Icon name="plus" /></button>
+      <button aria-label="Zoom out" onClick={() => map.zoomOut(0.5)}><Icon name="minus" /></button>
+      <button aria-label="Reset view" className="sep" onClick={() => map.flyToBounds(map.options.maxBounds as L.LatLngBoundsExpression, { duration: 0.6 })}>
+        <Icon name="target" />
+      </button>
+    </div>
+  );
+}
+
+function ScaleBar() {
+  const map = useMap();
+  const [s, setS] = useState({ px: 80, label: "1 km" });
+  useEffect(() => {
+    const update = () => {
+      const c = map.getCenter();
+      const pxPerDeg = Math.pow(2, map.getZoom()); // CRS scale: 2^z px per degree
+      const mPerPx = metersPerDegLon(c.lat) / pxPerDeg; // true ground E-W metres per pixel
+      const m = niceScale(mPerPx * 110);
+      setS({ px: m / mPerPx, label: m >= 1000 ? `${m / 1000} km` : `${m} m` });
+    };
+    update();
+    map.on("zoomend moveend", update);
+    return () => {
+      map.off("zoomend moveend", update);
+    };
+  }, [map]);
+  return (
+    <div className="scalebar" title="Ground distance on the Mars sphere (R = 3,396.19 km) at the map centre latitude">
+      <div className="bar" style={{ width: s.px }} />
+      <span>{s.label}</span>
+    </div>
+  );
+}
+
+export function MapView(props: Props) {
+  const { manifest, pois, rover, layers, opacity, stops, route, hoverIndex, placeMode, flyTarget, onMapClick, onCursor, onPoiAction, planning } = props;
+  const [selectedPoi, setSelectedPoi] = useState<string | null>(null);
+  const a = manifest.aoi;
+  const maxBounds = useMemo(() => L.latLngBounds([a.lat_min - 0.02, a.lon_min - 0.03], [a.lat_max + 0.02, a.lon_max + 0.03]), [a]);
+  const L_ = manifest.layers;
+  const routeLatLngs = useMemo(() => route?.path_lonlat.map(([x, y]) => [y, x] as [number, number]) ?? [], [route]);
+  const hoverPt = hoverIndex !== null && route ? route.path_lonlat[hoverIndex] : null;
+  const legend = L_.elevation.legend as { min_m: number; max_m: number };
+
+  return (
+    <div className={`map-wrap ${placeMode ? "placing" : ""}`}>
+      <MapContainer
+        crs={MarsCRS}
+        center={[(a.lat_min + a.lat_max) / 2, (a.lon_min + a.lon_max) / 2]}
+        zoom={13}
+        minZoom={11.5}
+        maxZoom={17}
+        zoomSnap={0.25}
+        zoomDelta={0.5}
+        maxBounds={maxBounds}
+        maxBoundsViscosity={0.8}
+        zoomControl={false}
+        attributionControl={false}
+        className="map"
+      >
+        <Controller manifest={manifest} flyTarget={flyTarget} onMapClick={onMapClick} onCursor={onCursor} />
+        <Pane name="terrain" style={{ zIndex: 200 }}>
+          {layers.terrain && L_.terrain.bounds && <ImageOverlay url={`/data/${L_.terrain.file}`} bounds={L_.terrain.bounds} />}
+        </Pane>
+        <Pane name="elevation" style={{ zIndex: 210 }}>
+          {layers.elevation && L_.elevation.bounds && (
+            <ImageOverlay url={`/data/${L_.elevation.file}`} bounds={L_.elevation.bounds} opacity={layers.terrain ? opacity : 1} className="smooth" />
+          )}
+          {layers.elevation && L_.hirise_elevation?.bounds && (
+            <ImageOverlay url={`/data/${L_.hirise_elevation.file}`} bounds={L_.hirise_elevation.bounds} opacity={layers.terrain ? opacity : 1} />
+          )}
+        </Pane>
+        <Pane name="contours" style={{ zIndex: 220 }}>
+          {layers.elevation && L_.contours.bounds && <ImageOverlay url={`/data/${L_.contours.file}`} bounds={L_.contours.bounds} opacity={0.55} />}
+        </Pane>
+        <Pane name="hazard" style={{ zIndex: 230 }}>
+          {layers.slope && L_.slope.bounds && <ImageOverlay url={`/data/${L_.slope.file}`} bounds={L_.slope.bounds} opacity={Math.min(1, opacity + 0.2)} />}
+          {layers.slope && L_.hirise_slope?.bounds && (
+            <ImageOverlay url={`/data/${L_.hirise_slope.file}`} bounds={L_.hirise_slope.bounds} opacity={Math.min(1, opacity + 0.2)} />
+          )}
+        </Pane>
+        {L_.hirise_elevation?.bounds && (layers.elevation || layers.slope) && (
+          <Pane name="hirise-frame" style={{ zIndex: 240 }}>
+            <Polyline
+              positions={[
+                [L_.hirise_elevation.bounds[0][0], L_.hirise_elevation.bounds[0][1]],
+                [L_.hirise_elevation.bounds[1][0], L_.hirise_elevation.bounds[0][1]],
+                [L_.hirise_elevation.bounds[1][0], L_.hirise_elevation.bounds[1][1]],
+                [L_.hirise_elevation.bounds[0][0], L_.hirise_elevation.bounds[1][1]],
+                [L_.hirise_elevation.bounds[0][0], L_.hirise_elevation.bounds[0][1]],
+              ]}
+              pathOptions={{ color: "#e9e3ff", weight: 1, dashArray: "4 4", opacity: 0.7, interactive: false }}
+            />
+          </Pane>
+        )}
+        {layers.rover && (
+          <Pane name="rover" style={{ zIndex: 400 }}>
+            <GeoJSON data={rover} style={() => ({ color: "#fff6c9", weight: 2, opacity: 0.85, dashArray: "1 5", lineCap: "round" })} interactive={false} />
+          </Pane>
+        )}
+        <Pane name="route" style={{ zIndex: 450 }}>
+          {routeLatLngs.length > 1 && (
+            <>
+              <Polyline positions={routeLatLngs} pathOptions={{ color: "#2ee6d6", weight: 12, opacity: 0.22, interactive: false }} />
+              <Polyline positions={routeLatLngs} pathOptions={{ color: "#5ff5e6", weight: 3.5, opacity: 1, interactive: false }} />
+            </>
+          )}
+          {route && route.path_lonlat.filter((_, i) => i % Math.max(1, Math.floor(route.path_lonlat.length / 8)) === 0 && i > 0).map(([x, y], i) => (
+            <CircleMarker key={i} center={[y, x]} radius={3} pathOptions={{ color: "#fff", fillColor: "#5ff5e6", fillOpacity: 1, weight: 1.5, interactive: false }} />
+          ))}
+          {hoverPt && <CircleMarker center={[hoverPt[1], hoverPt[0]]} radius={7} pathOptions={{ color: "#fff", fillColor: "#ff4fa3", fillOpacity: 1, weight: 2 }} />}
+        </Pane>
+        {layers.geology &&
+          pois.map((p) => (
+            <Marker
+              key={p.id}
+              position={[p.lat, p.lon]}
+              icon={p.category === "landing" ? L.divIcon({ className: "", html: `<div class="poi-pin landing"></div>`, iconSize: [18, 18], iconAnchor: [9, 9] }) : sampleIcon(p, selectedPoi === p.id)}
+              eventHandlers={{ click: () => setSelectedPoi(p.id) }}
+            >
+              <Popup className="poi-popup" maxWidth={280}>
+                <div className="popup">
+                  <div className="popup-title">
+                    {p.number ? <span className="num">#{p.number}</span> : null}
+                    {p.name}
+                  </div>
+                  <div className="popup-badges">
+                    <KindBadge kind="real" title="Name, sol and type from NASA" />
+                    {p.position_quality === "estimated" && <KindBadge kind="estimated" title={p.position_method} />}
+                  </div>
+                  {p.category === "sample" ? (
+                    <dl>
+                      <dt>Type</dt><dd>{p.type}</dd>
+                      <dt>Campaign</dt><dd>{p.campaign}</dd>
+                      <dt>Sealed</dt><dd>Sol {p.sol_sealed} · {p.date_sealed}</dd>
+                      {p.core_length_cm ? (<><dt>Core length</dt><dd>{p.core_length_cm} cm</dd></>) : null}
+                      <dt>Position</dt><dd>{formatLat(p.lat)} · {formatLon(p.lon)}</dd>
+                    </dl>
+                  ) : (
+                    <p className="popup-desc">{p.description}</p>
+                  )}
+                  {p.position_method && <p className="popup-note">{p.position_method}</p>}
+                  {planning && (
+                    <div className="popup-actions">
+                      <button className="btn-mini teal" onClick={() => onPoiAction(p, "start")}>Start</button>
+                      <button className="btn-mini purple" onClick={() => onPoiAction(p, "waypoint")}>Waypoint</button>
+                      <button className="btn-mini pink" onClick={() => onPoiAction(p, "destination")}>Destination</button>
+                    </div>
+                  )}
+                </div>
+              </Popup>
+            </Marker>
+          ))}
+        {stops.map((s) => (
+          <Marker key={s.id} position={[s.lat, s.lon]} icon={stopIcon(s.role)} zIndexOffset={1000} interactive={false}>
+            <Tooltip permanent direction="right" offset={[12, -18]} className={`stop-label label-${s.role}`}>
+              {s.name.toUpperCase()}
+            </Tooltip>
+          </Marker>
+        ))}
+        <MapButtons />
+        <ScaleBar />
+      </MapContainer>
+
+      <div className="map-title">
+        <h2>Jezero Crater</h2>
+        <span>Mars · 18.4° N, 77.4° E</span>
+      </div>
+
+      {layers.elevation && (
+        <div className="legend">
+          <div className="legend-title">Elevation (m, areoid)</div>
+          <div className="legend-ramp" />
+          <div className="legend-ticks">
+            {[0, 0.25, 0.5, 0.75, 1].map((t) => (
+              <span key={t}>{Math.round(legend.min_m + t * (legend.max_m - legend.min_m)).toLocaleString("en-US")}</span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="credit">CTX: NASA/JPL/MSSS · HiRISE: NASA/JPL/UArizona · DTMs: USGS Astrogeology · Traverse: NASA/JPL-Caltech</div>
+      {placeMode && <div className="place-hint" style={{ borderColor: STOP_COLORS[placeMode] }}>Click the map to place the {placeMode}</div>}
+    </div>
+  );
+}
