@@ -16,7 +16,7 @@ import { Hint, Icon, KindBadge, Mascot, Term } from "./components/ui";
 import { apiHealth, compareRoutes, loadStatic, planRoute, probeTerrain, type TerrainProbe } from "./lib/api";
 import { loadExtras, probeMinerals, type GeologyFile, type MineralProbe, type PhotosFile } from "./lib/nasaExtras";
 import { GroundView } from "./components/GroundView";
-import { loadWater, zoneStopName, zonePoiId, type WaterFile, type WaterZone } from "./lib/water";
+import { loadWater, zoneStopName, zonePoiId, type WaterBreakdown, type WaterFile, type WaterZone } from "./lib/water";
 import { OBJECTIVE_META, OBJECTIVE_ORDER } from "./lib/compare";
 import { DEFAULT_EVA, evaPlan as computeEva, teamEvaPlan } from "./lib/eva";
 import { noRouteAlert, routeAlerts, sortAlerts, type Alert } from "./lib/safety";
@@ -300,6 +300,30 @@ export default function App() {
     setPick(null);
     if (view !== "planner") setView("planner");
     if (flyThere) fly(z.target[0], z.target[1], 15);
+  };
+
+  /** A clicked heatmap spot (not a highlighted region) as destination; the map does not move. */
+  const setWaterPointDestination = (lon: number, lat: number, b: WaterBreakdown) => {
+    const name = `Water evidence spot (index ${b.index})`;
+    if (mode === "team") setTeamStop("aDest", lon, lat, name);
+    else addStop("destination", lon, lat, name);
+    setPick(null);
+    if (view !== "planner") setView("planner");
+  };
+
+  /* Other overlays that share the water layer's violet/turquoise family: hide them on request, restore later. */
+  const COLOUR_LAYERS: [LayerKey, string][] = [["elevation", "Elevation colours"], ["geomap", "Geologic units"], ["minerals", "Mineral indicators"], ["slope", "Steep ground"]];
+  const otherColourLayers = layers.water ? COLOUR_LAYERS.filter(([k]) => layers[k]).map(([, l]) => l) : [];
+  const [hiddenForWater, setHiddenForWater] = useState<LayerKey[] | null>(null);
+  const waterOnly = () => {
+    const on = COLOUR_LAYERS.map(([k]) => k).filter((k) => layers[k]);
+    setHiddenForWater(on);
+    setLayers((l) => ({ ...l, ...Object.fromEntries(on.map((k) => [k, false])) }));
+  };
+  const restoreColourLayers = () => {
+    const back = hiddenForWater ?? [];
+    setHiddenForWater(null);
+    setLayers((l) => ({ ...l, ...Object.fromEntries(back.map((k) => [k, true])) }));
   };
 
   const sig = JSON.stringify({ stops, maxSlope, routeName, notes, objective, missionId, eva });
@@ -818,6 +842,10 @@ export default function App() {
                   waterOpacity={waterOpacity}
                   waterZone={waterZone}
                   onWaterDestination={(z) => setWaterDestination(z, false)}
+                  onWaterPointDestination={setWaterPointDestination}
+                  otherColourLayers={otherColourLayers}
+                  onWaterOnly={waterOnly}
+                  onRestoreColourLayers={hiddenForWater?.length ? restoreColourLayers : undefined}
                   onRemoveStop={(id) => setStops((s) => s.filter((x) => x.id !== id))}
                   roverMaxSol={roverMaxSol ?? undefined}
                   onOpenGroundView={(id) => setGroundView({ poiId: id })}

@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { COMPONENT_LABEL, WATER_RAMP, zoneWhy, type ComponentKey, type WaterFile, type WaterZone } from "../../lib/water";
+import { COMPONENT_LABEL, evidenceIndex, zoneWhy, type ComponentKey, type WaterFile, type WaterZone } from "../../lib/water";
 import { Icon, KindBadge } from "../ui";
 import { rampColor } from "./WaterCellCard";
+import { WaterLegend } from "./WaterLegend";
 
 /** Legend, opacity, highlighted regions and the documented formula for the Ancient Water Evidence layer. */
 export function WaterExplorer({
@@ -24,7 +25,6 @@ export function WaterExplorer({
   const [open, setOpen] = useState<string | null>(selectedZone);
   const [formulaOpen, setFormulaOpen] = useState(false);
   const [rejOpen, setRejOpen] = useState(false);
-  const gradient = `linear-gradient(90deg, ${WATER_RAMP.map(([t, c]) => `${c} ${t * 100}%`).join(", ")})`;
   const f = water.formula;
   return (
     <div className="key-block water-x" data-testid="water-explorer">
@@ -32,17 +32,13 @@ export function WaterExplorer({
       <p className="water-honest">
         A project-defined <b>evidence index</b> for rocks formed or changed by <b>ancient</b> water. It is <b>not</b> a chance of finding water, and not a map of today's ice or groundwater.
       </p>
-      <div className="water-legend" aria-label="Water evidence legend">
-        <div className="water-ramp" style={{ background: gradient }} />
-        <div className="water-ramp-ticks"><span>0 · low</span><span>0.5</span><span>1 · high</span></div>
-        <div className="water-missing"><span className="wsw missing" /> Insufficient data (not scored)</div>
-      </div>
+      <WaterLegend water={water} />
       <div className="opacity-head"><span>Water layer strength</span><span>{Math.round(opacity * 100)}%</span></div>
       <input type="range" min={0.2} max={1} step={0.05} value={opacity} onChange={(e) => setOpacity(parseFloat(e.target.value))} aria-label="Water evidence layer strength" />
 
       <div className="water-zones-head">
         <b>Highlighted regions</b>
-        <em>score ≥ {water.zone_threshold}, all data present, at least 4 cells</em>
+        <em>index ≥ {Math.round(water.zone_threshold * 100)}, all data present, at least 4 cells</em>
       </div>
       {water.zones.length === 0 && <p className="fine muted">No region passes the highlight threshold.</p>}
       <ul className="water-zones">
@@ -54,7 +50,7 @@ export function WaterExplorer({
                 <span className="wz-id" style={{ background: rampColor(z.score_mean) }}>{z.id}</span>
                 <span className="wz-text">
                   <b>{z.name}</b>
-                  <em>mean {z.score_mean.toFixed(2)} · {z.area_km2} km²</em>
+                  <em>mean index {evidenceIndex(z.score_mean)} · {z.area_km2} km²</em>
                 </span>
                 <Icon name={isOpen ? "chevronUp" : "chevronDown"} size={14} />
               </button>

@@ -12,6 +12,8 @@ export type MapSelection =
   | { kind: "poi"; id: string; groupIds?: string[] }
   /** An "N samples here" cluster. */
   | { kind: "poi-group"; ids: string[]; lon: number; lat: number; identical: boolean }
+  /** A clicked spot on the Ancient Water Evidence heatmap outside the planner (Explore view). */
+  | { kind: "water-cell"; lon: number; lat: number }
   /** A highlighted Ancient Water Evidence region (W1, W2...). */
   | { kind: "water"; id: string }
   /** A rover localization with NASA ground photos (camera marker). */
@@ -36,6 +38,8 @@ export function selectionKey(s: MapSelection | null): string {
       return `poi-group:${s.ids.join("+")}`;
     case "water":
       return `water:${s.id}`;
+    case "water-cell":
+      return `water-cell:${s.lon.toFixed(7)},${s.lat.toFixed(7)}`;
     case "photos":
       return `photos:${s.rmc}`;
     case "rover":

@@ -68,19 +68,29 @@ def test_zones_connectivity():
     assert [len(c) for c in z] == [4, 4]
 
 
-def test_ramp_and_bands():
-    assert W.ramp_rgb(0) == W.RAMP[0][1]
-    assert W.ramp_rgb(1) == W.RAMP[-1][1]
+def test_classes_tile_0_to_100_and_bands_agree():
+    covered = [i for lo, hi, *_ in W.CLASSES for i in range(lo, hi + 1)]
+    assert covered == list(range(101))
     assert W.band_label(None) == "Insufficient data"
     assert W.band_label(0.1) == "Low" and W.band_label(0.95) == "Very high"
+    assert W.band_label(0.595) == "High"  # index 60: band follows the displayed index, not the raw score
+    assert W.evidence_index(0.125) == 13 and W.evidence_index(0.5) == 50
+
+
+def test_class_colours_differ_from_other_overlays():
+    geology = {"#A99BDD", "#76C9C2", "#D98EBA", "#E6C79C", "#9FB8E8", "#C6A6E0"}
+    minerals = {"#D98EBA", "#F0B59A", "#8FD3A7", "#76C9C2", "#9FB8E8", "#A99BDD", "#E6C79C"}
+    water = {"#%02X%02X%02X" % c[4] for c in W.CLASSES}
+    assert len(water) == 5 and not water & (geology | minerals)
 
 
 def test_render_marks_missing_distinctly():
-    img = W.render_rgba(np.array([[0.0, np.nan]]), scale=6)
+    img = W.render_rgba(np.array([[0, -1]]), scale=6)
     low = img[:, :6]
     miss = img[:, 6:]
     assert (low[..., 3] == 215).all()
-    assert set(np.unique(miss[..., 3])) == {70, 200}  # hatch, not a ramp colour
+    assert tuple(low[0, 0, :3]) == W.CLASSES[0][4]
+    assert set(np.unique(miss[..., 3])) == {70, 200}  # hatch, not a class colour
 
 
 def test_rejected_datasets_documented():
@@ -144,3 +154,40 @@ def test_built_zones_use_only_fully_measured_cells_and_record_replication():
         assert all(v is not None for v in z["components_mean"].values())
         assert z["score_low_mean"] == pytest.approx(z["score_mean"], abs=0.011)
         assert "crism_signal" in z
+
+
+@pytest.mark.skipif(not (WEB / "water_evidence.json").exists(), reason="artefact not built")
+def test_built_index_matches_score_and_classes():
+    d = json.loads((WEB / "water_evidence.json").read_text(encoding="utf-8"))
+    for s, i in zip(d["cells"]["score"], d["cells"]["index"]):
+        assert (s is None) == (i is None)
+        if s is not None:
+            assert i == math.floor(s * 100 + 0.5)
+    assert [c["min"] for c in d["formula"]["classes"]] == [0, 20, 40, 60, 80]
+
+
+def test_partial_coverage_cells_are_striped_not_plain():
+    img = W.render_rgba(np.array([[90, 90]]), scale=6, partial=np.array([[False, True]]))
+    plain, part = img[:, :6, :3], img[:, 6:, :3]
+    assert (plain != (250, 250, 252)).any(axis=-1).all()
+    assert ((part == (250, 250, 252)).all(axis=-1)).sum() >= 4
+
+
+@pytest.mark.skipif(not (WEB / "water_evidence.json").exists(), reason="artefact not built")
+def test_every_published_score_recomputes_from_published_components():
+    """Independent check of the shipped numbers: score = sum(w*s)/sum(w over available), index = round half up."""
+    d = json.loads((WEB / "water_evidence.json").read_text(encoding="utf-8"))
+    w = d["formula"]["weights"]
+    assert w == {"mineral": 0.45, "geology": 0.40, "landform": 0.15}
+    c = d["cells"]
+    n = 0
+    for i, s in enumerate(c["score"]):
+        avail = {k: c[k][i] for k in w if c[k][i] is not None}
+        cov = sum(w[k] for k in avail)
+        if s is None:
+            assert cov < d["formula"]["min_coverage"]
+            continue
+        assert s == pytest.approx(sum(w[k] * v for k, v in avail.items()) / cov, abs=0.0051)
+        assert c["index"][i] == math.floor(s * 100 + 0.5)
+        n += 1
+    assert n == d["stats"]["scored"]

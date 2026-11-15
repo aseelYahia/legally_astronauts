@@ -184,7 +184,11 @@ def main() -> None:
         "geology": W.geology_score(fr),
         "landform": W.landform_score(relief),
     }
+    # components are published to 2 decimals; combine the PUBLISHED values so the panel's contributions add up exactly
+    comps = {k: np.where(np.isfinite(v), np.round(v, 2), np.nan) for k, v in comps.items()}
     score, coverage = W.combine(comps)
+    score = np.where(np.isfinite(score), np.round(score, 2), np.nan)  # the stored value; everything derives from it
+    index = np.where(np.isfinite(score), np.floor(score * 100 + 0.5), -1).astype(int)
     score_lo, score_hi = W.score_range(comps)
     full = coverage >= 0.999
     syms = list(fr)
@@ -195,7 +199,7 @@ def main() -> None:
     pois = json.loads((WEB / "pois.json").read_text(encoding="utf-8"))
     unit_name = {u["symbol"]: u["name"] for u in geo["units"]}
     zone_out = []
-    for k, cells in enumerate(W.zones(score, ZONE_THRESHOLD, eligible=full)[:6]):
+    for k, cells in enumerate(W.zones(np.where(index >= 0, index / 100, np.nan), ZONE_THRESHOLD, eligible=full)[:6]):
         rr = np.array([c[0] for c in cells]); cc = np.array([c[1] for c in cells])
         sc = score[rr, cc]
         sl = slope_med[rr, cc]
@@ -250,12 +254,15 @@ def main() -> None:
             "landform": {"saturation_m": W.RELIEF_SATURATION_M,
                          "text": "L = min(1, local relief / 40 m), relief = p95 − p5 of CTX DTM elevation over a 3×3-cell (~270 m) window"},
             "bands": [{"below": hi, "label": lbl} for hi, lbl in W.BANDS],
+            "classes": [{"min": lo, "max": hi, "label": lbl, "priority": pr, "color": "#%02X%02X%02X" % rgb, "color_name": nm}
+                        for lo, hi, lbl, pr, rgb, nm in W.CLASSES],
+            "index": "evidence index = floor(score × 100 + 0.5), 0-100; the map colour is the class of this index",
             "assumption": "All weights, priors, thresholds and saturation values are PAWPRINT assumptions, not calibrated values.",
         },
         "units": [{"symbol": s, "name": unit_name.get(s, s), "prior": W.UNIT_PRIOR.get(s), "reason": W.UNIT_REASON.get(s)} for s in syms],
         "indicator_keys": list(W.AQUEOUS_PARAMS.values()),
         "cells": {
-            "score": col(score), "coverage": col(coverage), "mineral": col(comps["mineral"]), "geology": col(comps["geology"]),
+            "score": col(score), "index": [int(v) if v >= 0 else None for v in index.ravel()], "coverage": col(coverage), "mineral": col(comps["mineral"]), "geology": col(comps["geology"]),
             "landform": col(comps["landform"]), "relief_m": col(relief, 1), "crism_measured": col(cr["measured_frac"]),
             "crism_indicator": col(cr["strong_frac"], 3), "crism_weak": col(cr["weak_frac"], 3),
             "crism_replicated": col(cr["sig_replicated"], 3), "crism_single": col(cr["sig_single"], 3),
@@ -281,7 +288,7 @@ def main() -> None:
         "rejected": EXTRA_DATASETS["water_rejected"]["items"],
     }
     (WEB / "water_evidence.json").write_text(json.dumps(out, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    Image.fromarray(W.render_rgba(score)).save(WEB / "water_evidence.png", optimize=True)
+    Image.fromarray(W.render_rgba(index, partial=(index >= 0) & ~full)).save(WEB / "water_evidence.png", optimize=True)
     bounds = [[g["lat0"] - g["rows"] * g["dlat"], g["lon0"]], [g["lat0"], g["lon0"] + g["cols"] * g["dlon"]]]
     mf = WEB / "manifest.json"
     m = json.loads(mf.read_text(encoding="utf-8"))

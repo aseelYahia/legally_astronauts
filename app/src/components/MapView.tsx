@@ -1,5 +1,6 @@
 import L from "leaflet";
-import { type WaterFile, type WaterZone } from "../lib/water";
+import { cellIndex, type WaterBreakdown, type WaterFile, type WaterZone } from "../lib/water";
+import { WaterLegend } from "./water/WaterLegend";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CircleMarker, GeoJSON, ImageOverlay, MapContainer, Marker, Pane, Polyline, Tooltip, useMap, useMapEvents } from "react-leaflet";
 import { metersPerDegLon, niceScale } from "../lib/mars";
@@ -87,6 +88,12 @@ interface Props {
   waterOpacity?: number;
   waterZone?: string | null;
   onWaterDestination?: (z: WaterZone) => void;
+  /** Clicked water-evidence spot -> route destination (Explore view) */
+  onWaterPointDestination?: (lon: number, lat: number, b: WaterBreakdown) => void;
+  /** Other colour overlays that are on while the water layer is on, and a one-click way to hide/restore them */
+  otherColourLayers?: string[];
+  onWaterOnly?: () => void;
+  onRestoreColourLayers?: () => void;
   /** Remove a route stop (from the stop's details in the information panel) */
   onRemoveStop?: (id: string) => void;
 }
@@ -410,6 +417,10 @@ export function MapView(props: Props) {
       setMarked(null); // empty ground: drop a marker selection (the planner then shows the clicked spot)
       setProbePt(!planning && !placeMode ? { lon, lat } : null);
       onMapClick(lon, lat);
+      // Explore view: a click on the water-evidence heatmap opens its breakdown in the information panel
+      // (the planner already shows it for the clicked spot). Never moves the map.
+      const w = live.current.water;
+      if (!planning && !placeMode && live.current.layers.water && w && cellIndex(w, lon, lat) !== null) setMarked({ kind: "water-cell", lon, lat });
     },
     [planning, placeMode, onMapClick],
   );
@@ -417,7 +428,7 @@ export function MapView(props: Props) {
   const panelContent = (() => {
     // a selection whose layer is hidden is not shown (its marker is gone)
     if (sel?.kind === "poi" || sel?.kind === "poi-group") if (!layers.geology) return null;
-    if (sel?.kind === "water" && !layers.water) return null;
+    if ((sel?.kind === "water" || sel?.kind === "water-cell") && !layers.water) return null;
     if (sel?.kind === "photos" && !layers.photos) return null;
     if (sel?.kind === "rover" && !layers.rover) return null;
     return buildPanelContent(sel, {
@@ -439,6 +450,7 @@ export function MapView(props: Props) {
       onPlanTo: (p) => live.current.onPlanTo(p),
       onOpenGroundView: props.onOpenGroundView ? (id) => live.current.onOpenGroundView?.(id) : undefined,
       onWaterDestination: props.onWaterDestination ? (z) => live.current.onWaterDestination?.(z) : undefined,
+      onWaterPointDestination: props.onWaterPointDestination ? (lon, lat, b) => live.current.onWaterPointDestination?.(lon, lat, b) : undefined,
       onRemoveStop: props.onRemoveStop ? (id) => live.current.onRemoveStop?.(id) : undefined,
     });
   })();
@@ -494,24 +506,42 @@ export function MapView(props: Props) {
     ...(props.weather
       ? [{ id: "weather" as const, label: "Mars weather (archived NASA reading)", short: "Weather", chipIcon: <Icon name="cloud" size={13} />, content: <div className="wx-chip">{props.weather}</div> }]
       : []),
-    ...(layers.elevation
+    ...(layers.elevation || (layers.water && props.water)
       ? [
           {
             id: "legend" as const,
-            label: "Elevation legend",
+            label: layers.water && props.water ? "Map legend: water evidence and elevation" : "Elevation legend",
             short: "Legend",
-            chipIcon: <span className="mp-ramp" aria-hidden="true" />,
+            chipIcon: <span className={`mp-ramp ${layers.water && props.water ? "water" : ""}`} aria-hidden="true" />,
             content: (
               <div className="legend">
-                <div className="legend-title">
-                  <Term k="elevation" /> (m, <Term k="areoid">areoid</Term>)
-                </div>
-                <div className="legend-ramp" />
-                <div className="legend-ticks">
-                  {[0, 0.25, 0.5, 0.75, 1].map((t) => (
-                    <span key={t}>{Math.round(legend.min_m + t * (legend.max_m - legend.min_m)).toLocaleString("en-US")}</span>
-                  ))}
-                </div>
+                {layers.water && props.water && (
+                  <div className="legend-water">
+                    <div className="legend-title">Water evidence index <em>0–100, not a probability</em></div>
+                    <WaterLegend water={props.water} compact />
+                    {(props.otherColourLayers?.length ?? 0) > 0 ? (
+                      <p className="legend-clash">
+                        {props.otherColourLayers!.join(", ")} {props.otherColourLayers!.length > 1 ? "also use" : "also uses"} violet/turquoise tones.{" "}
+                        {props.onWaterOnly && <button className="link-btn" onClick={props.onWaterOnly}>Show water colours only</button>}
+                      </p>
+                    ) : props.onRestoreColourLayers ? (
+                      <p className="legend-clash"><button className="link-btn" onClick={props.onRestoreColourLayers}>Restore the other colour layers</button></p>
+                    ) : null}
+                  </div>
+                )}
+                {layers.elevation && (
+                  <>
+                    <div className="legend-title">
+                      <Term k="elevation" /> (m, <Term k="areoid">areoid</Term>)
+                    </div>
+                    <div className="legend-ramp" />
+                    <div className="legend-ticks">
+                      {[0, 0.25, 0.5, 0.75, 1].map((t) => (
+                        <span key={t}>{Math.round(legend.min_m + t * (legend.max_m - legend.min_m)).toLocaleString("en-US")}</span>
+                      ))}
+                    </div>
+                  </>
+                )}
               </div>
             ),
           },
@@ -717,7 +747,7 @@ export function MapView(props: Props) {
         ))}
         {ring && (
           <Pane name="selection" style={{ zIndex: 590 }}>
-            <Marker position={[ring.lat, ring.lon]} icon={sel?.kind === "point" || (!panelContent && probePt) ? pointRingIcon : ringIcon} interactive={false} keyboard={false} pane="selection" />
+            <Marker position={[ring.lat, ring.lon]} icon={sel?.kind === "point" || sel?.kind === "water-cell" || (!panelContent && probePt) ? pointRingIcon : ringIcon} interactive={false} keyboard={false} pane="selection" />
           </Pane>
         )}
         <MapButtons manifest={manifest} fit={fit} />

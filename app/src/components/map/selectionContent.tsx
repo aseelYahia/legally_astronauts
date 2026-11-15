@@ -1,12 +1,12 @@
 import type L from "leaflet";
-import { explainAt, zoneWhy, type WaterFile, type WaterZone } from "../../lib/water";
+import { breakdownAt, evidenceIndex, zoneWhy, type WaterBreakdown, type WaterFile, type WaterZone } from "../../lib/water";
 import { formatLat, formatLon } from "../../lib/mars";
 import { photosForPoi, sampleCheck, type Photo, type PhotosFile } from "../../lib/nasaExtras";
 import { selectionKey, type MapSelection } from "../../lib/mapSelection";
 import type { RouteHazard } from "../../lib/routeHazards";
 import type { Poi, Stop, StopRole, TeamSlot } from "../../types";
 import { Icon, KindBadge, Term } from "../ui";
-import { WaterCellCard } from "../water/WaterCellCard";
+import { WaterInfoBody } from "../water/WaterInfoBody";
 import { GroupList, HazardDetails } from "./HazardLayer";
 import { splitZoom } from "./PoiLayer";
 import type { PanelContent } from "./MapInfoPanel";
@@ -33,7 +33,20 @@ export interface SelectionCtx {
   onPlanTo: (p: Poi) => void;
   onOpenGroundView?: (poiId: string | null) => void;
   onWaterDestination?: (z: WaterZone) => void;
+  /** Set a clicked water-evidence spot (not a highlighted region) as the route destination */
+  onWaterPointDestination?: (lon: number, lat: number, b: WaterBreakdown) => void;
   onRemoveStop?: (id: string) => void;
+}
+
+/** Header fields shared by every clicked water-evidence spot. */
+function waterHead(b: WaterBreakdown) {
+  return {
+    icon: "drop",
+    tone: "sky" as const,
+    kicker: "Ancient water evidence · ~90 m cell",
+    title: b.index === null ? "Not enough data here" : `Evidence index ${b.index} / 100`,
+    badges: <KindBadge kind="estimate" title="Exploration index from NASA/USGS data; weights are PAWPRINT assumptions. Not a probability of finding water." />,
+  };
 }
 
 const coords = (lat: number, lon: number, digits = 4) => (
@@ -177,7 +190,16 @@ export function buildPanelContent(sel: MapSelection | null, c: SelectionCtx): Pa
   const key = selectionKey(sel);
   switch (sel.kind) {
     case "point": {
-      const info = c.water ? explainAt(c.water, sel.lon, sel.lat) : null;
+      const b = c.water ? breakdownAt(c.water, sel.lon, sel.lat) : null;
+      if (b)
+        return {
+          key,
+          ...waterHead(b),
+          sub: coords(sel.lat, sel.lon),
+          anchor: { lat: sel.lat, lon: sel.lon },
+          body: <WaterInfoBody b={b} />,
+          actions: pointActions(c, sel.lon, sel.lat),
+        };
       return {
         key,
         icon: "pin",
@@ -189,7 +211,6 @@ export function buildPanelContent(sel: MapSelection | null, c: SelectionCtx): Pa
         body: (
           <>
             <p className="mi-lead">{c.teamMode ? "Use this spot for one of the team's stops." : "Choose how this spot fits into your Marswalk."}</p>
-            {info && <WaterCellCard info={info} compact />}
           </>
         ),
         actions: pointActions(c, sel.lon, sel.lat),
@@ -240,6 +261,23 @@ export function buildPanelContent(sel: MapSelection | null, c: SelectionCtx): Pa
         ) : undefined,
       };
     }
+    case "water-cell": {
+      const b = c.water ? breakdownAt(c.water, sel.lon, sel.lat) : null;
+      if (!b) return null;
+      return {
+        key,
+        ...waterHead(b),
+        sub: coords(sel.lat, sel.lon),
+        anchor: { lat: sel.lat, lon: sel.lon },
+        body: <WaterInfoBody b={b} />,
+        actions:
+          c.onWaterPointDestination && b.index !== null ? (
+            <button className="mi-btn primary wide" onClick={() => { c.onWaterPointDestination!(sel.lon, sel.lat, b); c.close(); }}>
+              <Icon name="pin" size={16} />Set as Destination
+            </button>
+          ) : undefined,
+      };
+    }
     case "water": {
       const z = c.water?.zones.find((x) => x.id === sel.id);
       if (!z || !c.water) return null;
@@ -256,7 +294,7 @@ export function buildPanelContent(sel: MapSelection | null, c: SelectionCtx): Pa
           <div className="water-zone-pop mi-water" data-testid="water-zone-popup">
             <dl className="mi-facts">
               <dt>Mean evidence index</dt>
-              <dd><b>{z.score_mean.toFixed(2)}</b> <em>(0–1, not a probability)</em></dd>
+              <dd><b>{evidenceIndex(z.score_mean)}</b> / 100 <em>(not a probability)</em></dd>
               <dt>Area</dt>
               <dd>{z.area_km2} km²</dd>
               <dt>Nearest sample</dt>

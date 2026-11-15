@@ -45,7 +45,18 @@ The three components:
   | Aeb | Eolian bedforms | 0 |
 
 - **L** = min(1, relief / 40 m), where relief is p95 − p5 of the CTX elevation over a 3 × 3-cell (~270 m) window. Relief marks scarps and ridges where layered rock is exposed; relief alone is not water evidence.
-- **Bands:** Low < 0.2 ≤ Modest < 0.4 ≤ Moderate < 0.6 ≤ High < 0.8 ≤ Very high.
+- **Evidence index and colours:** index = floor(score × 100 + 0.5), from 0 to 100. Each class has one flat colour, and the legend, the map image and the click panel all use the same classes:
+
+  | Index | Class | Colour |
+  |---|---|---|
+  | 0–19 | Low priority | very pale mint `#E2F5F1` |
+  | 20–39 | Modest priority | light turquoise `#A4DED3` |
+  | 40–59 | Moderate priority | sky blue `#86BDE8` |
+  | 60–79 | High priority | violet `#A388E4` |
+  | 80–100 | Very high priority | deep purple `#6A4AC7` |
+
+  - **Striped** cells are scored but have an input missing (usually CRISM); their colour is provisional. **Hatched grey** cells don't have enough data and are unknown, not low.
+  - None of these colours reuses a geology, CRISM-indicator or elevation colour. A faint 90 m tile grid also marks the layer as score cells rather than mapped polygons. See the colour audit below.
 - **Confidence** comes from coverage and CRISM measurement: Higher, Moderate, Lower, or None.
 - **Highlighted regions:** 8-connected clusters of **fully measured** cells (all three components present) with score ≥ 0.6 and at least 4 cells. Up to 6 are kept; there are currently 5.
   - Each region's destination is its highest-scoring cell whose median CTX slope is below 15°.
@@ -79,7 +90,7 @@ Region-by-region reasons are in [VALIDATION.md](VALIDATION.md).
 ## How it connects to mission planning
 
 1. **Mission Layers → Science & Geology → Ancient Water Evidence** gives:
-   - a toggle, a legend (turquoise→lavender ramp, plus a hatched "insufficient data" swatch) and an opacity slider;
+   - a toggle, the classed legend (with striped and hatched swatches) and an opacity slider. The same legend is always shown in the map's movable legend panel while the layer is on, with "Show water colours only" when other violet or turquoise overlays are on;
    - the highlighted regions, each with "Why it is interesting";
    - "How the score is calculated" and "Data we checked but did not use".
 2. **Click the map** (planner) to open the popup. It shows the cell's score, band, confidence and coverage, plus each component's value, weight and plain-language reason, and the limitations. This also works in Explore.
@@ -103,3 +114,35 @@ Region-by-region reasons are in [VALIDATION.md](VALIDATION.md).
 - `vite build` succeeded into a scratch outDir. `dist/` is locked by another process, which is the known EPERM issue.
 - Browser screenshots are in `screenshots/`: explorer panel, heatmap with zones, route to W1, cell popup, Expedition Log, Science Data, Future Navigation, mobile (375 px, no horizontal overflow).
 - No console errors.
+
+
+## Colour audit and the click panel (2026-11-15)
+
+**What the colours meant before this change:**
+- The water layer used a *continuous* ramp, #CEF2EC → #76C9C2 → #9FB8E8 → #A99BDD → #7C68CE.
+  - Three of those stops were the exact hex codes of geologic units Njf, Nle and NHjf2.
+  - The same three were also the CRISM Fe/Mg-clay, Al-OH and hydration indicators.
+  - The default-on elevation colours span violet → turquoise → pink.
+- With water opacity at about 0.6, the visible colour was a blend of the water score and whatever lay underneath. "Purple" could mean a high water index, the NHjf2 geology fill, a CRISM hydration pixel, or low elevation.
+- The ramp stops (0.3, 0.6, 0.85) also did not line up with the score bands (0.2/0.4/0.6/0.8), so no legend range could be exact.
+
+**What the colours mean now** (4,920 cells, of which 84 have insufficient data):
+
+| Class | Share of cells | Mostly | Typical inputs (median) |
+|---|---|---|---|
+| very pale mint, 0–19 | 31% | floor (Njf), wind ripples (Aeb), upper etched (Nue) | mineral 0, geology 0.15, terrain 0.23 |
+| light turquoise, 20–39 | 27% | floor (Njf), lower etched (Nle) | mineral 0, geology 0.40 |
+| sky blue, 40–59 | 38% | the delta, NHjf2 (1,812 of 1,863 cells) | mineral 0, geology 1.0, terrain 0.45 |
+| violet, 60–79 | 1.1% (52 cells) | delta, plus a CRISM signal (96% have mineral > 0) | mineral 0.46 |
+| deep purple, 80–100 | 0.6% (31 cells) | delta, plus clustered CRISM signal or strong relief | mineral 1.0 |
+
+So the large sky-blue area is the delta mapped by USGS. Only the small violet and purple spots add CRISM evidence. 11 of those 83 violet/purple cells have no CRISM data; they are now striped, and their panel shows the possible range (for example 53–98).
+
+**Click panel:** the MapInfoPanel shows the water breakdown when you click the heatmap. In the planner this is the clicked spot, with Set Destination / Set Start / Add Waypoint; in Explore it has Set as Destination. It shows:
+- the 0–100 index, priority class, colour and range, and confidence;
+- each input's score, weight (45/40/15), the weight actually used, and the points it adds (these sum to the index);
+- a plain-language explanation, missing-data warnings with the possible range, and sources.
+
+It never moves the map: the side panel or bottom sheet sits outside Leaflet. If it covers the spot, it offers "Show it" instead of panning by itself.
+
+Screenshots: `screenshots/09`–`14`.

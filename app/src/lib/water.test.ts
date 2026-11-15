@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { bandLabel, cellIndex, explainAt, explainCell, observationPrompt, zoneIdFromName, zoneStopName, zoneWhy, type WaterFile } from "./water";
+import { bandLabel, breakdownAt, cellIndex, classOf, evidenceIndex, explainAt, explainCell, observationPrompt, WATER_CLASSES, waterBreakdown, zoneIdFromName, zoneStopName, zoneWhy, type WaterFile } from "./water";
 
 const water = JSON.parse(readFileSync(resolve(__dirname, "../../public/data/water_evidence.json"), "utf-8")) as WaterFile;
 const manifest = JSON.parse(readFileSync(resolve(__dirname, "../../public/data/manifest.json"), "utf-8"));
@@ -100,5 +100,70 @@ describe("zones -> mission planning", () => {
     expect(zoneIdFromName(zoneStopName(z))).toBe(z.id);
     expect(zoneIdFromName("Science Site")).toBeNull();
     expect(observationPrompt(z.id)).toMatch(/Record what you actually see/);
+  });
+});
+
+describe("evidence index, classes and the panel breakdown (visualization upgrade)", () => {
+  const classes = water.formula.classes!;
+  it("the file's classes are the app's classes and tile 0-100 without gaps", () => {
+    expect(classes.map((c) => [c.min, c.max, c.color])).toEqual(WATER_CLASSES.map((c) => [c.min, c.max, c.color]));
+    const covered = classes.flatMap((c) => Array.from({ length: c.max - c.min + 1 }, (_, i) => c.min + i));
+    expect(covered).toEqual(Array.from({ length: 101 }, (_, i) => i));
+  });
+
+  it("water colours never reuse a geology or CRISM indicator colour", () => {
+    const others = new Set(["#A99BDD", "#76C9C2", "#D98EBA", "#E6C79C", "#9FB8E8", "#C6A6E0", "#F0B59A", "#8FD3A7"]);
+    for (const c of classes) expect(others.has(c.color.toUpperCase())).toBe(false);
+  });
+
+  it("every stored index is the rounded score, and its class is the map colour class", () => {
+    water.cells.score.forEach((s, i) => {
+      const idx = water.cells.index![i];
+      expect(idx).toBe(evidenceIndex(s));
+      if (idx !== null) expect(classOf(idx, classes)).not.toBeNull();
+    });
+    expect(evidenceIndex(0.595)).toBe(60);
+    expect(bandLabel(0.595)).toBe("High");
+  });
+
+  it("weighted contributions add up to the index for fully measured cells", () => {
+    let checked = 0;
+    water.cells.score.forEach((s, i) => {
+      if (s === null || water.cells.coverage[i]! < 0.999 || checked > 400) return;
+      const b = waterBreakdown(water, i);
+      const sum = b.components.reduce((t, c) => t + (c.points ?? 0), 0);
+      expect(Math.abs(sum - s * 100)).toBeLessThan(0.51); // score is stored to 2 decimals
+      expect(b.components.map((c) => c.weight)).toEqual([0.45, 0.4, 0.15]);
+      expect(b.partial).toBe(false);
+      checked++;
+    });
+    expect(checked).toBeGreaterThan(100);
+  });
+
+  it("missing CRISM is never shown as zero: re-weighted, striped, with a range and a warning", () => {
+    const i = water.cells.mineral.findIndex((m, k) => m === null && water.cells.score[k] !== null);
+    const b = waterBreakdown(water, i);
+    const m = b.components[0];
+    expect(m.score).toBeNull();
+    expect(m.points).toBeNull();
+    expect(b.partial).toBe(true);
+    expect(b.range![0]).toBeLessThanOrEqual(b.index!);
+    expect(b.range![1]).toBeGreaterThanOrEqual(b.index!);
+    expect(b.warnings.join(" ")).toMatch(/NOT counted as zero/);
+    expect(b.confidence).not.toBe("Higher");
+    expect(b.components[1].effectiveWeight!).toBeGreaterThan(0.4);
+    const sum = b.components.reduce((t, c) => t + (c.points ?? 0), 0);
+    expect(Math.abs(sum - water.cells.score[i]! * 100)).toBeLessThan(0.51);
+  });
+
+  it("the plain-language summary names the colour, its range and the index, and never says probability", () => {
+    const z = water.zones[0];
+    const b = breakdownAt(water, z.target[0], z.target[1])!;
+    expect(b.summary).toContain(b.cls!.color_name.slice(1));
+    expect(b.summary).toContain(`${b.cls!.min}-${b.cls!.max}`);
+    expect(b.summary).toContain(`scores ${b.index}`);
+    expect(b.summary.toLowerCase()).not.toMatch(/probab|chance|likely/);
+    const none = waterBreakdown(water, water.cells.score.findIndex((s) => s === null));
+    expect(none.summary).toMatch(/unknown, not low/);
   });
 });

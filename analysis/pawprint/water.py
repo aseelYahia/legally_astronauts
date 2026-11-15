@@ -65,13 +65,37 @@ UNIT_REASON = {
     "Aeb": "USGS: young (Amazonian) wind-blown ripples that cover older rock, so they hide rather than show water evidence.",
 }
 
-BANDS = [(0.2, "Low"), (0.4, "Modest"), (0.6, "Moderate"), (0.8, "High"), (1.01, "Very high")]
+# Evidence classes on the 0-100 EVIDENCE INDEX (index = floor(score * 100 + 0.5)); each class has ONE colour, so the map
+# colour, the legend range and the clicked value always agree. Colours are deliberately NOT any hex used by the geologic
+# units, the CRISM indicator layer or the elevation ramp (those reuse #76C9C2 / #9FB8E8 / #A99BDD; the old continuous
+# water ramp used the very same three, which made the overlays indistinguishable - visualization audit 2026-11-15).
+CLASSES = [
+    # (min index, max index, label, priority, colour, plain colour name)
+    (0, 19, "Low", "Low priority", (226, 245, 241), "very pale mint"),
+    (20, 39, "Modest", "Modest priority", (164, 222, 211), "light turquoise"),
+    (40, 59, "Moderate", "Moderate priority", (134, 189, 232), "sky blue"),
+    (60, 79, "High", "High priority", (163, 136, 228), "violet"),
+    (80, 100, "Very high", "Very high priority", (106, 74, 199), "deep purple"),
+]
+BANDS = [((hi + 1) / 100, lbl) for _, hi, lbl, *_ in CLASSES[:-1]] + [(1.01, CLASSES[-1][2])]
+
+
+def evidence_index(score: float | None) -> int | None:
+    """0-100 integer used for display, colours and classes (round half up, identical to the app)."""
+    if score is None or not math.isfinite(score):
+        return None
+    return int(math.floor(score * 100 + 0.5))
+
+
+def class_of(index: int | None):
+    if index is None:
+        return None
+    return next(c for c in CLASSES if c[0] <= index <= c[1])
 
 
 def band_label(score: float | None) -> str:
-    if score is None or not math.isfinite(score):
-        return "Insufficient data"
-    return next(lbl for hi, lbl in BANDS if score < hi)
+    c = class_of(evidence_index(score))
+    return "Insufficient data" if c is None else c[2]
 
 
 def mineral_component(params: dict[str, np.ndarray], thresholds: dict[str, float], denoise) -> dict[str, np.ndarray]:
@@ -230,31 +254,34 @@ def zones(score: np.ndarray, threshold: float, min_cells: int = 4, eligible: np.
     return sorted(out, key=len, reverse=True)
 
 
-# Soft Cosmic ramp: pale turquoise (low) -> lavender (high). Missing data is hatched grey, never on the ramp.
-RAMP = [(0.0, (206, 242, 236)), (0.3, (118, 201, 194)), (0.6, (159, 184, 232)), (0.85, (169, 155, 221)), (1.0, (124, 104, 206))]
+def class_rgb(index: int) -> tuple[int, int, int]:
+    return class_of(index)[4]
 
 
-def ramp_rgb(t: float) -> tuple[int, int, int]:
-    t = min(1.0, max(0.0, float(t)))
-    for (t0, c0), (t1, c1) in zip(RAMP, RAMP[1:]):
-        if t <= t1:
-            f = (t - t0) / (t1 - t0)
-            return tuple(int(round(x + (y - x) * f)) for x, y in zip(c0, c1))  # type: ignore[return-value]
-    return RAMP[-1][1]
-
-
-def render_rgba(score: np.ndarray, scale: int = 6) -> np.ndarray:
-    """RGBA image: ramp colour for scored cells, transparent-ish diagonal hatch for insufficient data."""
-    H, W = score.shape
+def render_rgba(index: np.ndarray, scale: int = 6, partial: np.ndarray | None = None) -> np.ndarray:
+    """RGBA image from the 0-100 index grid (-1 = insufficient data). One flat colour per evidence class, with a faint
+    darker 1 px tile edge so the layer reads as ~90 m score cells, not as mapped polygons; insufficient data is a
+    grey diagonal hatch, never a class colour. ``partial`` cells (scored, but a component such as CRISM is missing)
+    keep their class colour with sparse light stripes, so a score computed from incomplete inputs never looks like a
+    fully measured one."""
+    H, W = index.shape
     img = np.zeros((H * scale, W * scale, 4), dtype=np.uint8)
     yy, xx = np.mgrid[0: H * scale, 0: W * scale]
     hatch = ((xx + yy) % 6) < 2
+    edge = np.zeros((scale, scale), dtype=bool)
+    edge[-1, :] = edge[:, -1] = True
+    stripe = ((xx - yy) % 6) == 0
     for r in range(H):
         for c in range(W):
-            s = score[r, c]
+            v = int(index[r, c])
             blk = img[r * scale:(r + 1) * scale, c * scale:(c + 1) * scale]
-            if np.isfinite(s):
-                blk[...] = (*ramp_rgb(float(s)), 215)
+            if v >= 0:
+                rgb = class_rgb(v)
+                blk[...] = (*rgb, 215)
+                blk[edge] = (*(int(x * 0.82) for x in rgb), 215)
+                if partial is not None and partial[r, c]:
+                    s = stripe[r * scale:(r + 1) * scale, c * scale:(c + 1) * scale]
+                    blk[s] = (250, 250, 252, 235)
             else:
                 h = hatch[r * scale:(r + 1) * scale, c * scale:(c + 1) * scale]
                 blk[h] = (150, 146, 170, 200)

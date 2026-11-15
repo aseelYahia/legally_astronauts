@@ -48,12 +48,16 @@ export interface WaterFile {
     geology: { text: string; unit_prior: Record<string, number>; unit_reason: Record<string, string> };
     landform: { text: string; saturation_m: number };
     bands: { below: number; label: string }[];
+    /** One colour per class of the 0-100 evidence index (the PNG uses exactly these). */
+    classes?: WaterClass[];
     assumption: string;
   };
   units: { symbol: string; name: string; prior: number | null; reason: string | null }[];
   indicator_keys: string[];
   cells: {
     score: (number | null)[];
+    /** 0-100 evidence index = floor(score*100 + 0.5); the map colour is the class of this value. */
+    index?: (number | null)[];
     coverage: (number | null)[];
     mineral: (number | null)[];
     geology: (number | null)[];
@@ -88,14 +92,37 @@ export interface WaterLayerMeta {
   zones: number;
 }
 
-/** Same stops as analysis/pawprint/water.py RAMP (soft turquoise -> lavender). */
-export const WATER_RAMP: [number, string][] = [
-  [0, "#CEF2EC"],
-  [0.3, "#76C9C2"],
-  [0.6, "#9FB8E8"],
-  [0.85, "#A99BDD"],
-  [1, "#7C68CE"],
+export interface WaterClass {
+  min: number;
+  max: number;
+  label: string;
+  priority: string;
+  color: string;
+  color_name: string;
+}
+
+/** Same values as analysis/pawprint/water.py CLASSES (used if an older water_evidence.json has no classes). */
+export const WATER_CLASSES: WaterClass[] = [
+  { min: 0, max: 19, label: "Low", priority: "Low priority", color: "#E2F5F1", color_name: "very pale mint" },
+  { min: 20, max: 39, label: "Modest", priority: "Modest priority", color: "#A4DED3", color_name: "light turquoise" },
+  { min: 40, max: 59, label: "Moderate", priority: "Moderate priority", color: "#86BDE8", color_name: "sky blue" },
+  { min: 60, max: 79, label: "High", priority: "High priority", color: "#A388E4", color_name: "violet" },
+  { min: 80, max: 100, label: "Very high", priority: "Very high priority", color: "#6A4AC7", color_name: "deep purple" },
 ];
+
+export const waterClasses = (w: WaterFile | null | undefined): WaterClass[] => w?.formula.classes ?? WATER_CLASSES;
+
+/** 0-100 evidence index, rounded half up exactly like the Python build. */
+export const evidenceIndex = (score: number | null | undefined): number | null =>
+  score === null || score === undefined || !Number.isFinite(score) ? null : Math.floor(score * 100 + 0.5);
+
+export function classOf(index: number | null, classes: WaterClass[] = WATER_CLASSES): WaterClass | null {
+  if (index === null) return null;
+  return classes.find((c) => index >= c.min && index <= c.max) ?? null;
+}
+
+/** Colour for a 0-1 score (zone chips etc.): the colour of its class. */
+export const scoreColor = (score: number, classes: WaterClass[] = WATER_CLASSES) => classOf(evidenceIndex(score), classes)?.color ?? "#999";
 
 export const COMPONENT_LABEL: Record<ComponentKey, string> = {
   mineral: "Water-related minerals (CRISM)",
@@ -121,16 +148,9 @@ export async function loadWater(path = "/data/water_evidence.json"): Promise<Wat
   }
 }
 
-export function bandLabel(score: number | null | undefined, bands?: WaterFile["formula"]["bands"]): string {
-  if (score === null || score === undefined || !Number.isFinite(score)) return "Insufficient data";
-  const b = bands ?? [
-    { below: 0.2, label: "Low" },
-    { below: 0.4, label: "Modest" },
-    { below: 0.6, label: "Moderate" },
-    { below: 0.8, label: "High" },
-    { below: 1.01, label: "Very high" },
-  ];
-  return (b.find((x) => score < x.below) ?? b[b.length - 1]).label;
+/** Band of a 0-1 score, decided on the displayed 0-100 index so the label always matches the map colour. */
+export function bandLabel(score: number | null | undefined, classes?: WaterClass[]): string {
+  return classOf(evidenceIndex(score), classes)?.label ?? "Insufficient data";
 }
 
 /** Grid cell index at a point, or null outside the map. */
@@ -230,7 +250,7 @@ export function explainCell(w: WaterFile, idx: number): CellExplain {
   // Higher = everything measured AND the mineral term is either zero or confirmed by a second observation.
   if (score !== null) confidence = coverage >= 0.999 && measured >= 0.9 ? (vals.mineral === 0 || (repl > 0 && single === 0) ? "Higher" : "Moderate") : coverage >= 0.85 ? "Moderate" : "Lower";
 
-  return { index: idx, score, band: bandLabel(score, w.formula.bands), coverage, confidence, components, unit: unit ? { symbol: unit.symbol, name: unit.name } : null, indicators, limitations };
+  return { index: idx, score, band: bandLabel(score, waterClasses(w)), coverage, confidence, components, unit: unit ? { symbol: unit.symbol, name: unit.name } : null, indicators, limitations };
 }
 
 export function explainAt(w: WaterFile | null, lon: number, lat: number): CellExplain | null {
@@ -275,3 +295,111 @@ export const WATER_POI_PREFIX = "water:";
 export const zonePoiId = (z: WaterZone) => `${WATER_POI_PREFIX}${z.id}`;
 export const zoneFromPoiId = (w: WaterFile | null, id: string | undefined) =>
   w && id?.startsWith(WATER_POI_PREFIX) ? w.zones.find((z) => z.id === id.slice(WATER_POI_PREFIX.length)) ?? null : null;
+
+
+/* ------------------------------------------------------------------------------------------------------------ */
+/* Full breakdown for the information panel (visualization upgrade 2026-11-15).                                 */
+/* ------------------------------------------------------------------------------------------------------------ */
+
+export interface ComponentBreakdown {
+  key: ComponentKey;
+  label: string;
+  /** 0-100, null when the input is unavailable (NEVER zero for missing data) */
+  score: number | null;
+  /** Fixed project weight, 0-1 (0.45 / 0.40 / 0.15) */
+  weight: number;
+  /** Weight actually used in this cell: equal to `weight` when nothing is missing, re-scaled otherwise */
+  effectiveWeight: number | null;
+  /** Points this component adds to the 0-100 index (sum over components = 100 x score) */
+  points: number | null;
+  text: string;
+  source: string;
+}
+
+export interface WaterBreakdown {
+  cell: number;
+  index: number | null;
+  cls: WaterClass | null;
+  partial: boolean;
+  /** 0-100 range the index could take if missing inputs were 0 or 1; null when nothing is missing */
+  range: [number, number] | null;
+  confidence: CellExplain["confidence"];
+  components: ComponentBreakdown[];
+  warnings: string[];
+  limitations: string[];
+  /** Plain-language "what this colour means and why" */
+  summary: string;
+  unit: { symbol: string; name: string } | null;
+}
+
+export const COMPONENT_SOURCE: Record<ComponentKey, string> = {
+  mineral: "NASA MRO CRISM MTRDR summary parameters (PDS Geosciences), 18 m, 3 observations 2007-2011",
+  geology: "USGS SIM 3464 geologic map (Sun & Stack 2020), 1:75,000",
+  landform: "USGS Mars 2020 TRN CTX DTM, 20 m",
+};
+
+const SHORT: Record<ComponentKey, string> = { mineral: "the CRISM mineral signal", geology: "the geologic map", landform: "the terrain" };
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+export function waterBreakdown(w: WaterFile, idx: number): WaterBreakdown {
+  const e = explainCell(w, idx);
+  const classes = waterClasses(w);
+  const score = e.score;
+  const index = w.cells.index?.[idx] ?? evidenceIndex(score);
+  const cls = classOf(index, classes);
+  const wts = w.formula.weights;
+  const avail = e.components.filter((c) => c.value !== null).reduce((s, c) => s + wts[c.key], 0);
+  const partial = score !== null && e.components.some((c) => c.value === null);
+  const lo = w.cells.score_low?.[idx];
+  const hi = w.cells.score_high?.[idx];
+  const range: [number, number] | null = partial && lo != null && hi != null ? [evidenceIndex(lo)!, evidenceIndex(hi)!] : null;
+  const components: ComponentBreakdown[] = e.components.map((c) => ({
+    key: c.key,
+    label: c.label,
+    score: c.value === null ? null : Math.round(c.value * 100),
+    weight: wts[c.key],
+    effectiveWeight: c.value === null || score === null || avail <= 0 ? null : wts[c.key] / avail,
+    points: c.value === null || score === null || avail <= 0 ? null : (100 * c.value * wts[c.key]) / avail,
+    text: c.text,
+    source: COMPONENT_SOURCE[c.key],
+  }));
+  const warnings: string[] = [];
+  for (const c of components)
+    if (c.score === null)
+      warnings.push(
+        c.key === "mineral"
+          ? "No usable CRISM observation covers this spot. Missing mineral data is NOT counted as zero: the index uses the other inputs only, re-weighted, and the cell is striped on the map."
+          : `${c.label}: no data here. It is left out, not counted as zero.`,
+      );
+  if (range) warnings.push(`With the missing input measured, the index could be anywhere from ${range[0]} to ${range[1]}. Cells like this are never used for highlighted regions.`);
+  if (score === null) warnings.push("Too little data to score this spot (shown hatched grey on the map).");
+
+  let summary: string;
+  if (score === null || index === null || !cls) {
+    summary = "This spot is hatched grey because too few of the three inputs are available to compute an evidence index. That means unknown, not low.";
+  } else {
+    const ranked = components.filter((c) => c.points !== null).sort((a, b) => (b.points ?? 0) - (a.points ?? 0));
+    const parts = ranked.filter((c) => (c.points ?? 0) >= 0.5).map((c) => `${SHORT[c.key]} adds ${Math.round(c.points!)}`);
+    const why = parts.length ? `${cap(parts.join(", "))}.` : "None of the inputs adds evidence here.";
+    const geo = e.components[1].value;
+    const lead =
+      geo !== null && e.unit && avail > 0 && (wts.geology * geo) / avail >= 0.3
+        ? ` Most of it comes from the USGS map, which maps this spot as ${e.unit.name} (${e.unit.symbol}).`
+        : "";
+    const mineral = e.components[0].value;
+    const mineralNote =
+      mineral === null
+        ? " There is no CRISM mineral data here, so this colour is provisional (striped)."
+        : mineral === 0
+          ? " CRISM measured this spot and found no water-related mineral signal above the app's thresholds."
+          : "";
+    summary = `${cap(cls.color_name)} means an evidence index of ${cls.min}-${cls.max}: ${cls.priority.toLowerCase()} for studying ancient water. This spot scores ${index}. ${why}${lead}${mineralNote}`;
+  }
+  return { cell: idx, index, cls, partial, range, confidence: e.confidence, components, warnings, limitations: e.limitations, summary, unit: e.unit };
+}
+
+export function breakdownAt(w: WaterFile | null, lon: number, lat: number): WaterBreakdown | null {
+  if (!w) return null;
+  const i = cellIndex(w, lon, lat);
+  return i === null ? null : waterBreakdown(w, i);
+}
