@@ -3,6 +3,7 @@ import { sampleCheck, type GeologyFile, type PhotosFile } from "../lib/nasaExtra
 import type { Manifest, Poi, Validation, WeatherSol } from "../types";
 import { nasaType } from "./MapView";
 import { ChallengeResources, CrismCard, GeologyCard, GroundViewCard, ObservationTimeline } from "./ScienceExtras";
+import { DataExplainer } from "./science/DataExplainer";
 import { Icon, KindBadge, Mascot, Term } from "./ui";
 
 export function ScienceView({
@@ -132,6 +133,8 @@ export function ScienceView({
           <p className="fine muted">The public feed has no newer sols. Live/forecast weather is <KindBadge kind="unavailable" />.</p>
         </details>
       </div>
+
+      <DataExplainer manifest={manifest} pois={pois} weather={weather} photos={photos} geology={geology} />
 
       <ChallengeResources />
       <ObservationTimeline manifest={manifest} photos={photos} />

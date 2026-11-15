@@ -8,19 +8,24 @@ import { TEAM_COLORS, TEAM_SLOTS } from "./components/planner/TeamPlanner";
 import { QuickGuide, type GuideStep } from "./components/QuickGuide";
 import { SavedRoutes } from "./components/SavedRoutes";
 import { ScienceView } from "./components/ScienceView";
+import { ExpeditionLog, expeditionStatus } from "./components/ExpeditionLog";
+import { PlanHero } from "./components/planner/PlanHero";
+import { RouteBar } from "./components/planner/RouteBar";
+import { loadExpedition, saveExpedition, soloSnapshot, teamSnapshot, type Expedition } from "./lib/expedition";
 import { Hint, Icon, KindBadge, Mascot, Term } from "./components/ui";
 import { apiHealth, compareRoutes, loadStatic, planRoute, probeTerrain, type TerrainProbe } from "./lib/api";
 import { loadExtras, probeMinerals, type GeologyFile, type MineralProbe, type PhotosFile } from "./lib/nasaExtras";
 import { GroundView } from "./components/GroundView";
 import { OBJECTIVE_META, OBJECTIVE_ORDER } from "./lib/compare";
 import { DEFAULT_EVA, evaPlan as computeEva, teamEvaPlan } from "./lib/eva";
-import { noRouteAlert, routeAlerts, sortAlerts, steepStretches, type Alert } from "./lib/safety";
+import { noRouteAlert, routeAlerts, sortAlerts, type Alert } from "./lib/safety";
+import { routeHazards } from "./lib/routeHazards";
 import { teamAlerts, teamSummary } from "./lib/team";
 import { formatLat, formatLon, parseLatLon } from "./lib/mars";
 import { deleteRoute, flag, loadRoutes, saveRoute } from "./lib/storage";
 import type { CompareResult, EvaSettings, LonLat, Manifest, MissionMode, Objective, Poi, RouteResult, SavedRoute, Stop, StopRole, TeamSlot, WeatherSol } from "./types";
 
-type View = "explore" | "planner" | "science";
+type View = "explore" | "planner" | "science" | "log";
 type Left = "layers" | "saved" | null;
 
 let uid = 0;
@@ -41,6 +46,7 @@ const VIEW_HELP: Record<View, string> = {
   explore: "Look around Jezero Crater and inspect the terrain",
   planner: "Plan a lower-risk walk between science targets",
   science: "See every dataset, source and validation check",
+  log: "Execute, track and document your planned Marswalk",
 };
 
 export default function App() {
@@ -69,6 +75,8 @@ export default function App() {
   const route: RouteResult | null = compare ? compare.routes[objective] : null;
   const [mode, setMode] = useState<MissionMode>("solo");
   const [plannerTab, setPlannerTab] = useState<PlannerTab>("route");
+  /** Safety alert highlighted on the Warnings board (and, via route-hazards, on the map). */
+  const [selectedAlertId, setSelectedAlertId] = useState<string | null>(null);
   const [missionId, setMissionId] = useState<string | null>(null);
   const [eva, setEva] = useState<EvaSettings>(DEFAULT_EVA);
   const [exporting, setExporting] = useState(false);
@@ -98,6 +106,14 @@ export default function App() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [activeIdx, setActiveIdx] = useState(0);
   const [planRequest, setPlanRequest] = useState(0);
+  /** Planner page: location clicked on the map, shown as a popup with Set Destination / Set Start / Add Waypoint. */
+  const [pick, setPick] = useState<{ lon: number; lat: number; key: number } | null>(null);
+  const [layersCollapsed, setLayersCollapsed] = useState(() => typeof window !== "undefined" && window.innerWidth <= 720);
+  // Expedition Log: persisted on this device (localStorage; photo pixels in IndexedDB).
+  const [expedition, setExpedition] = useState<Expedition | null>(() => loadExpedition());
+  useEffect(() => {
+    saveExpedition(expedition);
+  }, [expedition]);
 
   useEffect(() => {
     void loadExtras().then(setExtras);
@@ -187,6 +203,8 @@ export default function App() {
     setTeamStops((prev) => ({ ...prev, [slot]: { id: newId(), role: slot === "aStart" || slot === "bStart" ? "start" : "destination", lon, lat, poiId, name: name ?? label } }));
   };
 
+  useEffect(() => setPick(null), [view, mode]);
+
   // Programmatic re-plan (used after loading a saved route).
   useEffect(() => {
     if (planRequest) void analyzeRef.current();
@@ -224,6 +242,12 @@ export default function App() {
         setPlaceMode(null);
         return;
       }
+      if (view === "planner") {
+        const a = data?.manifest.aoi;
+        if (a && lon >= a.lon_min && lon <= a.lon_max && lat >= a.lat_min && lat <= a.lat_max) setPick({ lon, lat, key: Date.now() });
+        else setPick(null);
+        return;
+      }
       if (view === "explore") {
         setProbeBusy(true);
         if (isMobile) setSheetOpen(true);
@@ -238,7 +262,7 @@ export default function App() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [placeMode, addStop, view, isMobile, mode, teamPlace],
+    [placeMode, addStop, view, isMobile, mode, teamPlace, data],
   );
 
   const onPoiAction = useCallback(
@@ -338,22 +362,47 @@ export default function App() {
     return sortAlerts([...teamAlerts(teamErrors.A ?? null, teamErrors.B ?? null, teamSum, maxSlope), ...out, ...(teamEva?.alerts ?? [])]);
   }, [mode, routeError, route, maxSlope, weatherSols, evaP, teamRoutes, teamErrors, teamSum, teamEva]);
 
-  const steepMarkers = useMemo(() => {
-    const list: { key: string; at: LonLat; title: string; why: string }[] = [];
-    const add = (r: RouteResult, prefix: string) =>
-      steepStretches(r, 15).forEach((st, i) =>
-        list.push({
-          key: `${prefix}${i}`,
-          at: st.at,
-          title: `${prefix ? `Astronaut ${prefix}: ` : ""}steep ground ${st.maxSlope.toFixed(1)}°`,
-          why: `≥15° (hazard class) over about ${Math.max(Math.round(st.length_m), r.grid.resolution_m)} m. Horn slope on the ${r.grid.name.toUpperCase()} ${r.grid.resolution_m} m terrain grid.`,
-        }),
-      );
-    if (view !== "planner") return list;
-    if (mode === "solo" && route) add(route, "");
-    if (mode === "team") (["A", "B"] as const).forEach((w) => teamRoutes[w] && add(teamRoutes[w]!, w));
-    return list;
-  }, [view, mode, route, teamRoutes]);
+  // Location-specific hazards for the map: computed only from each route's own profile (lib/routeHazards).
+  const hazards = useMemo(() => {
+    if (view !== "planner") return [];
+    if (mode === "solo") return route ? routeHazards(route, { routeKey: objective, maxSlopeLimit: maxSlope }) : [];
+    return (["A", "B"] as const).flatMap((w) => (teamRoutes[w] ? routeHazards(teamRoutes[w]!, { routeKey: w, astronaut: w, maxSlopeLimit: maxSlope }) : []));
+  }, [view, mode, route, objective, teamRoutes, maxSlope]);
+  // The board offers "Show on map" for every warning that has a hazard marker (same alerts, plus the marker's exact route point).
+  const boardAlerts = useMemo(
+    () =>
+      alerts.map((a) => {
+        if (a.at) return a;
+        const h = hazards.find((x) => x.alertId === a.id || x.alsoAlertIds.includes(a.id));
+        return h ? { ...a, at: h.at } : a;
+      }),
+    [alerts, hazards],
+  );
+  const [hazardLocate, setHazardLocate] = useState(0);
+
+  // The route planned right now, frozen into the shape the Expedition Log stores.
+  const logCandidate = useMemo(() => {
+    if (mode === "solo") {
+      if (!route) return null;
+      return soloSnapshot({ routeId, name: routeName, route, stops, missionId, eva, evaPlan: evaP, alerts, color: OBJECTIVE_META[objective].color });
+    }
+    const t = teamStops;
+    if (!teamRoutes.A || !teamRoutes.B || !teamSum || !t.aStart || !t.aDest || !t.bStart || !t.bDest || !t.meet) return null;
+    return teamSnapshot({
+      routeId,
+      name: routeName,
+      routes: { A: teamRoutes.A, B: teamRoutes.B, Aret: teamRoutes.Aret, Bret: teamRoutes.Bret },
+      stops: { aStart: t.aStart, aDest: t.aDest, bStart: t.bStart, bDest: t.bDest, meet: t.meet },
+      summary: teamSum,
+      teamEva,
+      missionId,
+      eva,
+      alerts,
+      colors: { A: TEAM_COLORS.A, B: TEAM_COLORS.B },
+    });
+  }, [mode, route, routeId, routeName, stops, missionId, eva, evaP, alerts, objective, teamStops, teamRoutes, teamSum, teamEva]);
+  const liveAlertIds = useMemo(() => new Set(alerts.map((a) => a.id)), [alerts]);
+  const logAvailable = !!logCandidate || !!expedition;
 
   const runExport = async () => {
     if (!data) return;
@@ -448,23 +497,33 @@ export default function App() {
           : teamReady
             ? teamSum
               ? "Turquoise = Astronaut A · lavender = Astronaut B · rose pin = rendezvous"
-              : "All points set: press Plan Both in the planner panel"
-            : "Place both starts, both destinations and the rendezvous"
+              : "All points set: press Generate Both Routes below the map"
+            : "Click the map to place both starts, both destinations and the rendezvous"
       : step === 1
-        ? "Press Pick start on map in the planner, or click a marker and choose Set as start"
+        ? "Click anywhere on the map (or a sample marker) and choose Set Start"
         : step === 2
-          ? "Click a rock sample marker and choose Set destination"
+          ? "Click a spot or a rock sample and choose Set Destination"
           : step === 3
             ? busy
               ? "Planning over real terrain…"
-              : "Ready: press Plan Route in the planner panel"
-            : `${OBJECTIVE_META[objective].label} route shown solid; the other options are dashed · ⚠ marks steep ground`;
+              : "Ready: press Generate Route below the map"
+            : `${OBJECTIVE_META[objective].label} route shown solid; the other options are dashed · warning markers show where hazards are`;
 
-  const statusLabel = view === "explore" ? "Exploring" : view === "science" ? "Reviewing data" : route ? "Route ready" : "Planning";
-  const showLeft = view !== "science" && left !== null;
+  const statusLabel =
+    view === "log"
+      ? expeditionStatus(expedition) ?? (logCandidate ? "Ready to start" : "No route yet")
+      : view === "explore"
+        ? "Exploring"
+        : view === "science"
+          ? "Reviewing data"
+          : route || (mode === "team" && teamSum)
+            ? "Route ready"
+            : "Planning";
+  const fullPage = view === "science" || view === "log";
+  const showLeft = !fullPage && left !== null;
 
   return (
-    <div className={`app view-${view} ${showLeft ? "left-open" : "left-closed"} ${guideOpen ? "guide-open" : ""} ${sheetOpen ? "sheet-expanded" : ""}`}>
+    <div className={`app view-${view} ${showLeft ? "left-open" : "left-closed"} ${guideOpen ? "guide-open" : ""} ${sheetOpen && view !== "planner" ? "sheet-expanded" : ""}`}>
       <header className="topbar">
         <div className="brand">
           <Mascot pose="standing" size={40} />
@@ -472,10 +531,15 @@ export default function App() {
         </div>
         <span className="vsep" />
         <nav className="nav" aria-label="Main views">
-          {(["explore", "planner", "science"] as View[]).map((v) => (
-            <Hint key={v} text={VIEW_HELP[v]}>
-              <button className={view === v ? "active" : ""} aria-current={view === v ? "page" : undefined} onClick={() => { setView(v); if (v !== "planner") setPlaceMode(null); }}>
-                <Icon name={v === "explore" ? "explore" : v === "planner" ? "route" : "bars"} /> {v === "explore" ? "Explore" : v === "planner" ? "Mission Planner" : "Science Data"}
+          {(["explore", "planner", "science", "log"] as View[]).map((v) => (
+            <Hint key={v} text={v === "log" && !logAvailable ? "Plan a route first: the Expedition Log tracks a planned Marswalk." : VIEW_HELP[v]}>
+              <button
+                className={view === v ? "active" : ""}
+                aria-current={view === v ? "page" : undefined}
+                data-locked={v === "log" && !logAvailable ? "" : undefined}
+                onClick={() => { setView(v); if (v !== "planner") setPlaceMode(null); }}
+              >
+                <Icon name={v === "explore" ? "explore" : v === "planner" ? "route" : v === "science" ? "bars" : "log"} /> {v === "explore" ? "Explore" : v === "planner" ? "Mission Planner" : v === "science" ? "Science Data" : "Expedition Log"}
               </button>
             </Hint>
           ))}
@@ -514,15 +578,25 @@ export default function App() {
           <button className="rail-mobile" aria-current={view === "explore" ? "page" : undefined} onClick={() => { setView("explore"); setLeft(null); setPlaceMode(null); }}>
             <Icon name="explore" size={20} /><span>Explore</span>
           </button>
-          <button className={left === "layers" && view !== "science" ? "active" : ""} onClick={() => { if (view === "science") setView("explore"); setLeft(left === "layers" && view !== "science" ? null : "layers"); }}>
+          <button
+            className={view === "planner" ? (!layersCollapsed ? "active" : "") : left === "layers" && !fullPage ? "active" : ""}
+            onClick={() => {
+              if (view === "planner") return setLayersCollapsed((c) => !c);
+              if (fullPage) setView("explore");
+              setLeft(left === "layers" && !fullPage ? null : "layers");
+            }}
+          >
             <Icon name="map" size={20} /><span className="rl-desk">Map</span><span className="rl-mob">Layers</span>
           </button>
-          <button className={view === "planner" && left !== "layers" && left !== "saved" ? "active" : ""} onClick={() => { setView("planner"); if (isNarrow) setLeft(null); }}>
+          <button className={view === "planner" && left !== "saved" ? "active" : ""} onClick={() => { setView("planner"); if (isNarrow || view === "planner") setLeft(null); }}>
             <Icon name="route" size={20} /><span>Plan</span>
           </button>
           <button className={view === "science" ? "active" : ""} onClick={() => setView("science")}><Icon name="bars" size={20} /><span>Data</span></button>
-          <button className={left === "saved" && view !== "science" ? "active" : ""} onClick={() => { if (view === "science") setView("planner"); setLeft(left === "saved" && view !== "science" ? null : "saved"); }}>
+          <button className={left === "saved" && !fullPage ? "active" : ""} onClick={() => { if (fullPage) setView("planner"); setLeft(left === "saved" && !fullPage ? null : "saved"); }}>
             <Icon name="files" size={20} /><span>Files</span>{saved.length > 0 && <em className="count">{saved.length}</em>}
+          </button>
+          <button className={view === "log" ? "active" : ""} aria-current={view === "log" ? "page" : undefined} onClick={() => { setView("log"); setPlaceMode(null); }} title={logAvailable ? "Expedition Log" : "Plan a route first"}>
+            <Icon name="log" size={20} /><span>Log</span>{expedition && expedition.timer.status !== "idle" && expedition.timer.status !== "finished" && <em className="count live" aria-label="Expedition in progress" />}
           </button>
         </nav>
 
@@ -530,11 +604,48 @@ export default function App() {
           <main className="science-main">
             <ScienceView manifest={manifest} pois={pois} weather={weather} photos={extras.photos} geology={extras.geology} onOpenGroundView={(id) => setGroundView({ poiId: id })} />
           </main>
+        ) : view === "log" ? (
+          <main className="science-main xlog-main">
+            <ExpeditionLog
+              expedition={expedition}
+              setExpedition={setExpedition}
+              candidate={logCandidate}
+              manifest={manifest}
+              liveAlertIds={liveAlertIds}
+              onOpenPlanner={(tab) => {
+                setView("planner");
+                if (tab) setPlannerTab(tab);
+                if (isMobile) setSheetOpen(true);
+              }}
+              onOpenAlert={(id) => {
+                setView("planner");
+                setPlannerTab("safety");
+                setSelectedAlertId(id);
+                if (isMobile) setSheetOpen(true);
+              }}
+            />
+          </main>
         ) : (
-          <>
-            {showLeft && isNarrow && <div className="drawer-backdrop" onClick={() => setLeft(null)} aria-hidden="true" />}
-            {left === "layers" && (
+          <div className={view === "planner" ? "planner-page" : "view-contents"}>
+            {view === "planner" && (
+              <PlanHero
+                missionId={missionId}
+                setMissionId={setMissionId}
+                pois={pois}
+                from={mode === "solo" ? (stops.find((x) => x.role === "start") ?? null) : (teamStops.aStart ?? null)}
+                mode={mode}
+                inItinerary={new Set(stops.map((x) => x.poiId).filter(Boolean) as string[])}
+                onSetDestination={(p) => { onPoiAction(p, "destination"); fly(p.lon, p.lat, 14.5); }}
+                onAddWaypoint={(p) => { onPoiAction(p, "waypoint"); fly(p.lon, p.lat, 14.5); }}
+                onTeamSlot={(p, slot) => setTeamStop(slot, p.lon, p.lat, p.name, p.id)}
+                onShow={(p) => fly(p.lon, p.lat, 15.5)}
+              />
+            )}
+            {view !== "planner" && showLeft && isNarrow && <div className="drawer-backdrop" onClick={() => setLeft(null)} aria-hidden="true" />}
+            {(view === "planner" || left === "layers") && (
               <LayersPanel
+                docked={view === "planner"}
+                collapsed={view === "planner" && layersCollapsed}
                 manifest={manifest}
                 layers={layers}
                 setLayer={(k, v) => setLayers((l) => ({ ...l, [k]: v }))}
@@ -547,11 +658,21 @@ export default function App() {
                 roverMaxSol={roverMaxSol}
                 setRoverMaxSol={setRoverMaxSol}
                 onOpenGroundView={() => setGroundView({ poiId: null })}
-                onCollapse={() => setLeft(null)}
-                view={view}
+                onCollapse={() => (view === "planner" ? setLayersCollapsed((c) => !c) : setLeft(null))}
+                view={view === "planner" ? "planner" : "explore"}
               />
             )}
-            {left === "saved" && <SavedRoutes routes={saved} onLoad={loadSaved} onDelete={(id) => setSaved(deleteRoute(id))} onClose={() => setLeft(null)} />}
+            {left === "saved" &&
+              (view === "planner" ? (
+                <>
+                  <div className="drawer-backdrop pp-backdrop" onClick={() => setLeft(null)} aria-hidden="true" />
+                  <div className="pp-drawer">
+                    <SavedRoutes routes={saved} onLoad={loadSaved} onDelete={(id) => setSaved(deleteRoute(id))} onClose={() => setLeft(null)} />
+                  </div>
+                </>
+              ) : (
+                <SavedRoutes routes={saved} onLoad={loadSaved} onDelete={(id) => setSaved(deleteRoute(id))} onClose={() => setLeft(null)} />
+              ))}
 
             <main className="center">
               <div className="center-bar">
@@ -629,7 +750,10 @@ export default function App() {
                   }
                   routeKey={objective}
                   routeLabel={OBJECTIVE_META[objective].label}
-                  alertMarkers={steepMarkers}
+                  hazards={hazards}
+                  selectedAlertId={selectedAlertId}
+                  onSelectAlert={setSelectedAlertId}
+                  hazardLocateKey={hazardLocate}
                   teamMode={mode === "team"}
                   onTeamSlot={(p, slot) => setTeamStop(slot, p.lon, p.lat, p.name, p.id)}
                   teamRoutes={
@@ -663,6 +787,16 @@ export default function App() {
                   mineralOpacity={mineralOpacity}
                   roverMaxSol={roverMaxSol ?? undefined}
                   onOpenGroundView={(id) => setGroundView({ poiId: id })}
+                  pick={view === "planner" ? pick : null}
+                  onPickClose={() => setPick(null)}
+                  onPickRole={(role, lon, lat) => {
+                    addStop(role, lon, lat, role === "start" ? "Start point" : undefined);
+                    setPick(null);
+                  }}
+                  onPickSlot={(slot, lon, lat) => {
+                    setTeamStop(slot, lon, lat);
+                    setPick(null);
+                  }}
                   weather={
                     layers.weather && latestWx ? (
                       <>
@@ -682,8 +816,37 @@ export default function App() {
               </div>
             </main>
 
+            {view === "planner" && (
+              <RouteBar
+                mode={mode}
+                setMode={(m) => { setMode(m); setPlaceMode(null); setTeamPlace(null); }}
+                stops={stops}
+                removeStop={(id) => setStops((s) => s.filter((x) => x.id !== id))}
+                onFlyStop={(s) => fly(s.lon, s.lat, 15)}
+                compare={compare}
+                objective={objective}
+                setObjective={setObjective}
+                pace={eva.paceFactor > 0 ? eva.paceFactor : 1}
+                busy={busy}
+                apiUp={apiUp}
+                onPlan={() => void analyze()}
+                routeError={routeError}
+                team={{
+                  stops: teamStops,
+                  clear: (sl) => setTeamStops((prev) => { const n = { ...prev }; delete n[sl]; return n; }),
+                  routes: teamRoutes,
+                  summary: teamSum,
+                  ready: teamReady,
+                  busy: teamBusy,
+                  onPlan: () => void planTeam(),
+                }}
+                canStart={!!logCandidate}
+                onStartExpedition={() => setView("log")}
+              />
+            )}
             {view === "planner" ? (
               <PlannerPanel
+                docked
                 mode={mode}
                 setMode={(m) => { setMode(m); setPlaceMode(null); setTeamPlace(null); }}
                 compare={compare}
@@ -693,8 +856,15 @@ export default function App() {
                 exporting={exporting}
                 tab={plannerTab}
                 setTab={setPlannerTab}
-                alerts={alerts}
-                onLocateAlert={(a) => a.at && fly(a.at[0], a.at[1], 16)}
+                alerts={boardAlerts}
+                onLocateAlert={(a) => {
+                  if (hazards.some((h) => h.alertId === a.id || h.alsoAlertIds.includes(a.id))) {
+                    setSelectedAlertId(a.id);
+                    setHazardLocate((k) => k + 1);
+                  } else if (a.at) fly(a.at[0], a.at[1], 16);
+                }}
+                selectedAlertId={selectedAlertId}
+                onSelectAlert={setSelectedAlertId}
                 weather={weather}
                 missionId={missionId}
                 setMissionId={setMissionId}
@@ -757,7 +927,7 @@ export default function App() {
                 toggleSheet={() => setSheetOpen(!sheetOpen)}
               />
             )}
-          </>
+          </div>
         )}
       </div>
 

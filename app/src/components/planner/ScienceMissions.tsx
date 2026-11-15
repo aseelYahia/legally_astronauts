@@ -14,6 +14,7 @@ export function ScienceMissions({
   onAdd,
   onFly,
   inItinerary,
+  teamMode,
 }: {
   missionId: string | null;
   setMissionId: (id: string | null) => void;
@@ -22,13 +23,15 @@ export function ScienceMissions({
   onAdd: (p: Poi, role: StopRole) => void;
   onFly: (p: Poi) => void;
   inItinerary: Set<string>;
+  /** Two-astronaut mode: suggestions are assigned through the map marker (A / B / rendezvous slots). */
+  teamMode?: boolean;
 }) {
   const mission = MISSIONS.find((m) => m.id === missionId) ?? null;
   const recs = useMemo(() => (missionId ? recommend(missionId, pois, from, 4) : []), [missionId, pois, from]);
   return (
     <section className="science-missions" aria-labelledby="sci-mission-title">
       <h4 className="pl-section-title" id="sci-mission-title">
-        <Icon name="sparkle" size={15} /> Need ideas? Choose a science mission
+        <Icon name="sparkle" size={15} /> What do you want to learn?
       </h4>
       <div className="mission-grid" role="radiogroup" aria-label="Science objective">
         {MISSIONS.map((m) => (
@@ -70,7 +73,11 @@ export function ScienceMissions({
                       <p className="fine">{r.uncertainty} <KindBadge kind="estimated" /></p>
                     </details>
                     <div className="rec-actions">
-                      {added ? (
+                      {teamMode ? (
+                        <button className="btn-mini lav" onClick={() => onFly(r.poi)}>
+                          <Icon name="pin" size={12} /> Show on map to assign
+                        </button>
+                      ) : added ? (
                         <span className="added"><Icon name="check" size={13} /> In your Marswalk</span>
                       ) : (
                         <>

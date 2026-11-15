@@ -1,6 +1,6 @@
 import L from "leaflet";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { CircleMarker, GeoJSON, ImageOverlay, MapContainer, Marker, Pane, Polyline, Tooltip, useMap, useMapEvents } from "react-leaflet";
+import { CircleMarker, GeoJSON, ImageOverlay, MapContainer, Marker, Pane, Polyline, Popup, Tooltip, useMap, useMapEvents } from "react-leaflet";
 import { formatLat, formatLon, metersPerDegLon, niceScale } from "../lib/mars";
 import { photoSites, photosForPoi, sampleCheck, type GeologyFile, type MineralsLayer, type PhotosFile } from "../lib/nasaExtras";
 import type { LonLat, Manifest, Poi, RouteResult, Stop, StopRole, TeamSlot } from "../types";
@@ -8,6 +8,8 @@ import { Icon, KindBadge, Term } from "./ui";
 import { PoiLayer } from "./map/PoiLayer";
 import { RouteLayer, type DrawnRoute } from "./map/RouteLayer";
 import { TeamPins } from "./map/TeamPins";
+import { HazardLayer } from "./map/HazardLayer";
+import type { RouteHazard } from "../lib/routeHazards";
 import { MapPanels, type PanelDef } from "./map/MapPanels";
 import type { WeightedPoint } from "../lib/panelLayout";
 
@@ -44,8 +46,13 @@ interface Props {
   routeColor?: string;
   /** Non-selected compared routes, drawn underneath */
   altRoutes?: { key: string; label: string; route: RouteResult; color: string; dash?: string }[];
-  /** Safety alert markers (steep stretches) */
-  alertMarkers?: { key: string; at: LonLat; title: string; why: string }[];
+  /** Location-specific route hazards (lib/routeHazards), drawn by HazardLayer */
+  hazards?: RouteHazard[];
+  /** Warning selected on the Warnings board (kept in sync with the hazard markers) */
+  selectedAlertId?: string | null;
+  onSelectAlert?: (id: string | null) => void;
+  /** Bumped by the board's "Show on map" */
+  hazardLocateKey?: number;
   /** Two-astronaut mode */
   teamRoutes?: { key: string; label: string; route: RouteResult; color: string; dash?: string }[];
   teamPins?: { key: string; at: LonLat; label: string; who: "A" | "B" | "meet" }[];
@@ -64,7 +71,54 @@ interface Props {
   routeLabel?: string;
   /** Latest weather reading (rendered in a movable map panel) */
   weather?: ReactNode;
+  /** Location the user clicked in the planner: shows a popup with Set Destination / Set Start / Add Waypoint. */
+  pick?: { lon: number; lat: number; key: number } | null;
+  onPickRole?: (role: StopRole, lon: number, lat: number) => void;
+  onPickSlot?: (slot: TeamSlot, lon: number, lat: number) => void;
+  onPickClose?: () => void;
 }
+
+/** Popup for an arbitrary clicked map location (planner only). Stays open until an action or the close button. */
+function PickPopup({ pick, team, onRole, onSlot, onClose }: { pick: { lon: number; lat: number; key: number }; team: boolean; onRole?: Props["onPickRole"]; onSlot?: Props["onPickSlot"]; onClose?: () => void }) {
+  return (
+    <Popup
+      key={pick.key}
+      position={[pick.lat, pick.lon]}
+      closeOnClick={false}
+      autoClose={false}
+      autoPan
+      className="pick-popup"
+      eventHandlers={{ remove: () => onClose?.() }}
+    >
+      <div className="pick">
+        <div className="pick-head">
+          <span className="pick-icon"><Icon name="pin" size={18} /></span>
+          <div>
+            <b>Selected location</b>
+            <span>{formatLat(pick.lat, 3)}, {formatLon(pick.lon, 3)}</span>
+          </div>
+        </div>
+        {team ? (
+          <div className="pick-actions team">
+            <button className="pick-btn primary" onClick={() => onSlot?.("aDest", pick.lon, pick.lat)}><Icon name="pin" size={16} />A destination</button>
+            <button className="pick-btn" onClick={() => onSlot?.("bDest", pick.lon, pick.lat)}><Icon name="pin" size={16} />B destination</button>
+            <button className="pick-btn" onClick={() => onSlot?.("meet", pick.lon, pick.lat)}><Icon name="target" size={16} />Rendezvous</button>
+            <button className="pick-btn" onClick={() => onSlot?.("aStart", pick.lon, pick.lat)}><Icon name="flag" size={16} />A start</button>
+            <button className="pick-btn" onClick={() => onSlot?.("bStart", pick.lon, pick.lat)}><Icon name="flag" size={16} />B start</button>
+          </div>
+        ) : (
+          <div className="pick-actions">
+            <button className="pick-btn primary" onClick={() => onRole?.("destination", pick.lon, pick.lat)}><Icon name="pin" size={18} />Set Destination</button>
+            <button className="pick-btn" onClick={() => onRole?.("start", pick.lon, pick.lat)}><Icon name="flag" size={18} />Set Start</button>
+            <button className="pick-btn" onClick={() => onRole?.("waypoint", pick.lon, pick.lat)}><Icon name="route" size={18} />Add Waypoint</button>
+          </div>
+        )}
+      </div>
+    </Popup>
+  );
+}
+
+const hiriseLabel = L.divIcon({ className: "", html: `<div class="hirise-label">HiRISE Coverage (4 m routing grid)</div>`, iconSize: [0, 0], iconAnchor: [-8, -8] });
 
 const cameraIcon = L.divIcon({
   className: "",
@@ -74,13 +128,6 @@ const cameraIcon = L.divIcon({
 });
 
 const ROLE_LABEL: Record<StopRole, string> = { start: "start", waypoint: "waypoint", destination: "destination" };
-
-const alertIcon = L.divIcon({
-  className: "",
-  html: `<div class="alert-pin" aria-hidden="true"><svg viewBox="0 0 24 24" width="28" height="28"><path d="M8 1.5h8l6.5 6.5v8l-6.5 6.5H8L1.5 16V8z" fill="#D98EBA" stroke="#F1EDF5" stroke-width="1.8"/><path d="M12 6.5v6.5M12 16.6v.4" stroke="#131522" stroke-width="2.6" stroke-linecap="round"/></svg></div>`,
-  iconSize: [28, 28],
-  iconAnchor: [14, 14],
-});
 
 function stopIcon(role: StopRole, num?: number) {
   return L.divIcon({
@@ -232,7 +279,12 @@ function Controller({ manifest, flyTarget, onMapClick, onCursor, fit }: Pick<Pro
   }, [map, fit]);
   useMapEvents({
     click: (e) => onMapClick(e.latlng.lng, e.latlng.lat),
-    mousemove: (e) => onCursor([e.latlng.lng, e.latlng.lat]),
+    // The pointer over an open popup is not "on the ground": skip the read-out so moving inside a popup
+    // does not re-render the whole app on every pixel.
+    mousemove: (e) => {
+      if ((e.originalEvent?.target as Element | null)?.closest?.(".leaflet-popup")) return;
+      onCursor([e.latlng.lng, e.latlng.lat]);
+    },
     mouseout: () => onCursor(null),
   });
   return null;
@@ -360,9 +412,14 @@ export function MapView(props: Props) {
     }
     for (const s of stops) at(s.lat, s.lon, 6);
     for (const t of props.teamPins ?? []) at(t.at[1], t.at[0], 6);
-    for (const m of props.alertMarkers ?? []) at(m.at[1], m.at[0], 5);
+    for (const h of props.hazards ?? []) at(h.at[1], h.at[0], 5);
     return out;
-  }, [leaflet, layers.geology, pois, drawn, stops, props.teamPins, props.alertMarkers]);
+  }, [leaflet, layers.geology, pois, drawn, stops, props.teamPins, props.hazards]);
+  // exact points the hazard icons must not cover (science targets, stops, team pins)
+  const hazardAvoid = useMemo<LonLat[]>(
+    () => [...(layers.geology ? pois.map((p) => [p.lon, p.lat] as LonLat) : []), ...stops.map((s) => [s.lon, s.lat] as LonLat), ...(props.teamPins ?? []).map((t) => t.at)],
+    [layers.geology, pois, stops, props.teamPins],
+  );
   const placeKey = `${drawn.map((d) => `${d.key}:${d.route.path_lonlat.length}`).join(",")}|${stops.map((s) => s.id).join(",")}|${(props.teamPins ?? []).map((t) => t.key).join(",")}`;
   const hintText = placeMode ? (props.placeLabel ? `Click the map to place ${props.placeLabel}` : `Click the map to place the ${ROLE_LABEL[placeMode]}`) : hint;
   const panels: PanelDef[] = [
@@ -503,6 +560,7 @@ export function MapView(props: Props) {
             >
               <Tooltip sticky className="map-tip">HiRISE detail area (1 m DTM) · routes fully inside use a 4 m grid derived from it</Tooltip>
             </Polyline>
+            <Marker position={[hb[1][0], hb[0][1]]} icon={hiriseLabel} interactive={false} keyboard={false} />
           </Pane>
         )}
         {layers.rover && (
@@ -572,9 +630,9 @@ export function MapView(props: Props) {
                     <>
                       <div className="popup-q">Use this spot in your Marswalk:</div>
                       <div className="popup-actions">
+                        <button className="btn-mini rose" onClick={thenClose(() => onPoiAction(p, "destination"))}>Set destination</button>
                         <button className="btn-mini teal" onClick={thenClose(() => onPoiAction(p, "start"))}>Set as start</button>
                         <button className="btn-mini lav" onClick={thenClose(() => onPoiAction(p, "waypoint"))}>Add waypoint</button>
-                        <button className="btn-mini rose" onClick={thenClose(() => onPoiAction(p, "destination"))}>Set destination</button>
                       </div>
                     </>
                   ) : (
@@ -599,14 +657,15 @@ export function MapView(props: Props) {
               </Marker>
             </Fragment>
           ))}
-        {props.alertMarkers?.map((a) => (
-          <Marker key={a.key} position={[a.at[1], a.at[0]]} icon={alertIcon} zIndexOffset={900}>
-            <Tooltip direction="top" offset={[0, -10]} className="map-tip alert-tip">
-              <b>⚠ {a.title}</b>
-              <span>{a.why}</span>
-            </Tooltip>
-          </Marker>
-        ))}
+        {props.hazards && (
+          <HazardLayer
+            hazards={props.hazards}
+            avoid={hazardAvoid}
+            selectedAlertId={props.selectedAlertId}
+            onSelectAlert={props.onSelectAlert}
+            locateKey={props.hazardLocateKey}
+          />
+        )}
         {props.teamPins && props.teamPins.length > 0 && <TeamPins pins={props.teamPins} />}
         {[...stops.filter((s) => s.role === "start"), ...stops.filter((s) => s.role === "waypoint"), ...stops.filter((s) => s.role === "destination")].map((s, i, all) => (
           <Marker key={s.id} position={[s.lat, s.lon]} icon={stopIcon(s.role, all.length > 1 ? i + 1 : undefined)} zIndexOffset={1000} interactive={false}>
@@ -615,6 +674,9 @@ export function MapView(props: Props) {
             </Tooltip>
           </Marker>
         ))}
+        {planning && props.pick && (
+          <PickPopup pick={props.pick} team={!!props.teamMode} onRole={props.onPickRole} onSlot={props.onPickSlot} onClose={props.onPickClose} />
+        )}
         <MapButtons manifest={manifest} fit={fit} />
         <ScaleBar />
       </MapContainer>
