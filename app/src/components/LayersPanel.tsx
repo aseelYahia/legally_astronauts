@@ -3,6 +3,8 @@ import { INDICATOR_LABEL, type GeologyFile, type MineralsLayer, type PhotosFile 
 import type { Manifest } from "../types";
 import type { LayerKey } from "./MapView";
 import { DogTip, Icon, KindBadge, Term, Toggle } from "./ui";
+import type { WaterFile, WaterZone } from "../lib/water";
+import { WaterExplorer } from "./water/WaterExplorer";
 
 interface Row {
   key: LayerKey;
@@ -31,6 +33,12 @@ export function LayersPanel({
   onOpenGroundView,
   docked,
   collapsed,
+  water,
+  waterOpacity,
+  setWaterOpacity,
+  waterZone,
+  onShowWaterZone,
+  onWaterDestination,
 }: {
   manifest: Manifest;
   layers: Record<LayerKey, boolean>;
@@ -49,6 +57,12 @@ export function LayersPanel({
   /** Planner page: panel sits beside the map and folds into a slim header instead of closing. */
   docked?: boolean;
   collapsed?: boolean;
+  water?: WaterFile | null;
+  waterOpacity?: number;
+  setWaterOpacity?: (v: number) => void;
+  waterZone?: string | null;
+  onShowWaterZone?: (z: WaterZone) => void;
+  onWaterDestination?: (z: WaterZone) => void;
 }) {
   const [open, setOpen] = useState<string | null>(null);
   const [openCats, setOpenCats] = useState<Record<string, boolean>>({ "Terrain & Elevation": true });
@@ -145,6 +159,13 @@ export function LayersPanel({
               what: "Orbital mineral maps: not available yet",
               details: <>CRISM mineral data is not ingested, so the layer stays off rather than showing illustrations.</>,
             },
+        ...(water
+          ? [{
+              key: "water" as LayerKey, label: "Ancient Water Evidence", icon: "drop", kind: "estimate",
+              what: `Evidence index · ${water.zones.length} highlighted regions`,
+              details: <>A PAWPRINT index (0–1) combining CRISM water-related mineral signals, USGS SIM 3464 geologic units and CTX landform relief on a ~{water.grid.cell_m} m grid. The weights are project <Term k="hazard">assumptions</Term>. It shows where <b>ancient</b> water left evidence in the rocks; it is <b>not</b> a probability of finding water today. Click the map for a cell's breakdown.</>,
+            }]
+          : []),
         ...(photos
           ? [{
               key: "photos" as LayerKey, label: "Ground View photos", icon: "camera", kind: "real",
@@ -210,6 +231,17 @@ export function LayersPanel({
               ))}
             </div>
           </div>
+        )}
+        {layers.water && water && setWaterOpacity && (
+          <WaterExplorer
+            water={water}
+            opacity={waterOpacity ?? 0.75}
+            setOpacity={setWaterOpacity}
+            planning={view === "planner"}
+            selectedZone={waterZone ?? null}
+            onShowZone={(z) => onShowWaterZone?.(z)}
+            onSetDestination={(z) => onWaterDestination?.(z)}
+          />
         )}
         {layers.minerals && minerals && (
           <div className="key-block">

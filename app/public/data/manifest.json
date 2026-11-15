@@ -587,6 +587,28 @@
    "zoom": 15,
    "pixel_deg": 2.1457672119140625e-05,
    "tiles": 90
+  },
+  "water_evidence": {
+   "file": "water_evidence.png",
+   "data": "water_evidence.json",
+   "bounds": [
+    [
+     18.418898737572693,
+     77.34
+    ],
+    [
+     18.51,
+     77.47126282200257
+    ]
+   ],
+   "kind": "estimate",
+   "sources": [
+    "crism_mtrdr",
+    "usgs_sim3464",
+    "ctx_dtm"
+   ],
+   "cell_m": 90.0,
+   "zones": 5
   }
  },
  "datasets": {
@@ -693,7 +715,8 @@
    "license": "Public domain (USGS)",
    "dates": "Published 2020.",
    "kind": "real",
-   "note": "Mapped on a semi-controlled CTX mosaic; USGS states random offsets of about 100-200 m from the Mars 2020 controlled CTX mosaic. Boundaries are approximate here and are not used for routing."
+   "note": "Mapped on a semi-controlled CTX mosaic; USGS states random offsets of about 100-200 m from the Mars 2020 controlled CTX mosaic. Boundaries are approximate here and are not used for routing.",
+   "verification": "Polygons are read from an ArcGIS feature service with no owner/attribution text. On 2026-11-15 they were checked against the OFFICIAL USGS database (sim3464_database.zip, Nili.gdb layer GeoUnits_v1): same CRS (MTM clon 77.5E, Mars 2000 sphere), identical unit codes and names, per-unit IoU >= 0.9999 in the AOI, boundary differences <= 0.04 m; unit interpretations quoted by PAWPRINT appear on the official map sheet (sim3464.pdf). One clipping bug in PAWPRINT (a dropped hole, 0.021 km2 drawn as both Nue and NHjf2) was fixed. Script: analysis/scripts/validate_geology_official.py."
   },
   "crism_mtrdr": {
    "title": "MRO CRISM map-projected targeted reduced data records (MTRDR), refined summary parameters (SR)",
@@ -760,8 +783,9 @@
  },
  "extras_generated_utc": {
   "photos": "2026-11-14T21:45:47+00:00",
-  "geologic_units": "2026-11-14T19:43:16+00:00",
+  "geologic_units": "2026-11-15T13:52:53+00:00",
   "minerals": "2026-11-14T21:15:01+00:00",
-  "hirise_ortho": "2026-11-14T19:50:57+00:00"
+  "hirise_ortho": "2026-11-14T19:50:57+00:00",
+  "water_evidence": "2026-11-15T13:53:00+00:00"
  }
 }

@@ -4,6 +4,9 @@ import type { Manifest, Poi, Validation, WeatherSol } from "../types";
 import { nasaType } from "./MapView";
 import { ChallengeResources, CrismCard, GeologyCard, GroundViewCard, ObservationTimeline } from "./ScienceExtras";
 import { DataExplainer } from "./science/DataExplainer";
+import { FutureNavigation } from "./water/FutureNavigation";
+import { WaterDataSection } from "./water/WaterDataSection";
+import type { WaterFile } from "../lib/water";
 import { Icon, KindBadge, Mascot, Term } from "./ui";
 
 export function ScienceView({
@@ -13,6 +16,7 @@ export function ScienceView({
   photos,
   geology,
   onOpenGroundView,
+  water,
 }: {
   manifest: Manifest;
   pois: Poi[];
@@ -20,6 +24,7 @@ export function ScienceView({
   photos: PhotosFile | null;
   geology: GeologyFile | null;
   onOpenGroundView: (poiId: string | null) => void;
+  water?: WaterFile | null;
 }) {
   const ctx = manifest.layers.elevation.stats as Record<string, number | Record<string, number>>;
   const hi = manifest.layers.hirise_elevation?.stats as Record<string, number | Record<string, number> | number[]> | undefined;
@@ -136,8 +141,12 @@ export function ScienceView({
 
       <DataExplainer manifest={manifest} pois={pois} weather={weather} photos={photos} geology={geology} />
 
+      {water && <WaterDataSection water={water} />}
+
       <ChallengeResources />
       <ObservationTimeline manifest={manifest} photos={photos} />
+
+      <FutureNavigation />
 
       <h3 className="section-h">Datasets</h3>
       <div className="dataset-grid">

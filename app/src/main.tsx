@@ -8,6 +8,7 @@ import "./map.css";
 import "./dataExplainer.css";
 import "./expedition.css";
 import "./plannerPage.css";
+import "./water.css";
 import App from "./App";
 import { TooltipLayer } from "./components/ui";
 

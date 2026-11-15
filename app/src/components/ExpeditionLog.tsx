@@ -26,6 +26,7 @@ import { NOT_CERTIFIED } from "../lib/safety";
 import { MISSIONS } from "../lib/science";
 import { WARNING_ICONS, warningInfo } from "../lib/warningCatalog";
 import type { Manifest } from "../types";
+import { observationPrompt, zoneIdFromName } from "../lib/water";
 import { EntryEditor, type EntryDraft } from "./expedition/EntryEditor";
 import { CameraModal, PhotoThumb, PhotoViewer, usePhotoPickers } from "./expedition/Photos";
 import { Ring } from "./expedition/Ring";
@@ -169,6 +170,7 @@ export function ExpeditionLog({
   const totals = timerTotals(t, running ? now : Date.now());
   const supplies = supplyEstimate(snap.eva, totals.totalMs, snap.plannedTotalMin, snap.turnBackByMin);
   const goal = MISSIONS.find((m) => m.id === snap.missionId) ?? null;
+  const waterZoneId = zoneIdFromName(snap.destName) ?? snap.stops.map((s) => zoneIdFromName(s.name)).find(Boolean) ?? null;
   const counts = countByCategory(x.entries);
   const latestEntry = [...x.entries].sort((a, b) => b.updatedAt - a.updatedAt)[0] ?? null;
   const shownEntries = [...x.entries].filter((e) => !catFilter || e.category === catFilter).sort((a, b) => b.updatedAt - a.updatedAt);
@@ -268,6 +270,9 @@ export function ExpeditionLog({
                   {goal ? <p>{goal.title}</p> : <p className="muted">No goal chosen. <button className="xl-link" onClick={() => onOpenPlanner("goal")}>Pick one in the planner</button></p>}
                 </div>
               </div>
+              {waterZoneId && (
+                <p className="xl-water" data-testid="xl-water"><Icon name="drop" size={16} /><span>{observationPrompt(waterZoneId)}</span></p>
+              )}
               {snap.legs.length > 0 && (
                 <ul className="xl-legs">
                   {snap.legs.map((l) => (

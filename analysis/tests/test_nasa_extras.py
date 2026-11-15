@@ -410,3 +410,25 @@ def test_minerals_api(base_url):
     hit = get(f"lon={lon}&lat={lat}")
     assert hit["measured"] and any(i["key"] == "olivine" for i in hit["indicators"])
     assert hit["product"]["product_id"].endswith("_MTR3") and "not confirmed" in hit["note"]
+
+
+def test_hole_clipped_at_the_aoi_edge_is_kept():
+    """Audit 2026-11-15: a hole whose clipped ring starts ON the exterior's edge was dropped by the old
+    first-vertex test, so a NHjf2 island inside a Nue polygon was drawn as both units."""
+    box = (0, 0, 10, 10)
+    outer = [(0, 0), (0, 10), (10, 10), (10, 0), (0, 0)]  # clockwise exterior (ESRI)
+    hole = G.clip_ring([(-2, 4), (6, 4), (6, 8), (-2, 8), (-2, 4)], box)  # counter-clockwise, crosses x=0
+    assert hole and hole[0][0] == 0  # first vertex lies exactly on the exterior's edge
+    polys = G.esri_rings_to_polygons([outer, hole])
+    assert len(polys) == 1 and len(polys[0]) == 2
+
+
+def test_geologic_units_do_not_overlap(manifest):
+    """Units are a partition: summed (unrounded) polygon area equals the AOI, so no ground is drawn as two units.
+    Before the hole fix the sum exceeded the AOI by 0.0214 km2."""
+    import math
+    gj = json.loads(geo_path.read_text(encoding="utf-8"))
+    deg2 = sum(G.polygon_area([[tuple(pt) for pt in r] for r in poly]) for f in gj["features"] for poly in f["geometry"]["coordinates"])
+    a = manifest["aoi"]
+    box_deg2 = (a["lon_max"] - a["lon_min"]) * (a["lat_max"] - a["lat_min"])
+    assert deg2 == pytest.approx(box_deg2, abs=box_deg2 * 1e-4)  # < ~0.004 km2

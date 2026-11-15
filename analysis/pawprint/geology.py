@@ -65,10 +65,26 @@ def esri_rings_to_polygons(rings: list[list[tuple[float, float]]]) -> list[list[
     ESRI exteriors are clockwise (negative shoelace area, y up) and holes counter-clockwise."""
     exteriors = [[r] for r in rings if ring_area(r) < 0]
     for h in (r for r in rings if ring_area(r) >= 0):
-        host = next((p for p in exteriors if point_in_ring(h[0][0], h[0][1], p[0])), None)
+        host = hole_host(h, exteriors)
         if host is not None:
             host.append(h)
     return exteriors
+
+
+def hole_host(hole: list[tuple[float, float]], exteriors: list[list[list[tuple[float, float]]]]):
+    """Exterior that contains a hole ring, by majority vote over ALL hole vertices.
+
+    Testing only the first vertex fails when a hole has been clipped at the AOI box: its first vertex can then
+    lie exactly on the exterior's clipped edge, where a ray-casting test is undefined, and the hole is silently
+    dropped (found in the 2026-11-15 audit: a 0.021 km² NHjf2 island inside a Nue polygon at the AOI's NW edge
+    was drawn as Nue AND NHjf2). Vertices on the boundary are ambiguous, so the exterior containing the most
+    vertices wins."""
+    best, best_n = None, 0
+    for p in exteriors:
+        n = sum(point_in_ring(x, y, p[0]) for x, y in hole[:-1])
+        if n > best_n:
+            best, best_n = p, n
+    return best
 
 
 def polygon_area(poly: list[list[tuple[float, float]]]) -> float:

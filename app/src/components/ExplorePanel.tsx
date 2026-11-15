@@ -3,6 +3,8 @@ import type { TerrainProbe } from "../lib/api";
 import { INDICATOR_LABEL, unitAt, type GeologyFile, type MineralProbe, type PhotosFile } from "../lib/nasaExtras";
 import type { Poi, WeatherSol } from "../types";
 import { DogTip, Icon, KindBadge, Mascot, Term } from "./ui";
+import { explainAt, type WaterFile } from "../lib/water";
+import { WaterCellCard } from "./water/WaterCellCard";
 
 const HAZ = ["Easy", "Moderate", "Hazard", "No-go"];
 const HAZ_TEXT = [
@@ -26,6 +28,8 @@ export function ExplorePanel({
   mineralProbe,
   photos,
   onOpenGroundView,
+  water,
+  onWaterDestination,
 }: {
   probe: TerrainProbe | null;
   probeBusy: boolean;
@@ -40,7 +44,11 @@ export function ExplorePanel({
   mineralProbe: MineralProbe | null;
   photos: PhotosFile | null;
   onOpenGroundView: (poiId: string | null) => void;
+  /** Ancient Water Evidence data, passed only while the layer is on */
+  water?: WaterFile | null;
+  onWaterDestination?: (lon: number, lat: number) => void;
 }) {
+  const waterInfo = probe && water ? explainAt(water, probe.lon, probe.lat) : null;
   const latest = [...weather].reverse().find((s) => s.min_temp_c !== null && s.max_temp_c !== null);
   const samples = pois.filter((p) => p.category === "sample");
   const unit = probe ? unitAt(geology, probe.lon, probe.lat) : null;
@@ -136,6 +144,12 @@ export function ExplorePanel({
             </div>
           )}
         </section>
+
+        {waterInfo && probe && (
+          <section className="card">
+            <WaterCellCard info={waterInfo} compact onSetDestination={onWaterDestination ? () => onWaterDestination(probe.lon, probe.lat) : undefined} />
+          </section>
+        )}
 
         <section className="card">
           <div className="card-title">

@@ -1,10 +1,16 @@
 import L from "leaflet";
+import { type WaterFile, type WaterZone } from "../lib/water";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { CircleMarker, GeoJSON, ImageOverlay, MapContainer, Marker, Pane, Polyline, Popup, Tooltip, useMap, useMapEvents } from "react-leaflet";
-import { formatLat, formatLon, metersPerDegLon, niceScale } from "../lib/mars";
-import { photoSites, photosForPoi, sampleCheck, type GeologyFile, type MineralsLayer, type PhotosFile } from "../lib/nasaExtras";
+import { CircleMarker, GeoJSON, ImageOverlay, MapContainer, Marker, Pane, Polyline, Tooltip, useMap, useMapEvents } from "react-leaflet";
+import { metersPerDegLon, niceScale } from "../lib/mars";
+import { photoSites, type GeologyFile, type MineralsLayer, type PhotosFile } from "../lib/nasaExtras";
 import type { LonLat, Manifest, Poi, RouteResult, Stop, StopRole, TeamSlot } from "../types";
-import { Icon, KindBadge, Term } from "./ui";
+import { Icon, Term } from "./ui";
+import type { MapSelection } from "../lib/mapSelection";
+import { MapSelectionContext, type MapSelectionApi } from "./map/MapSelectionContext";
+import { MapInfoPanel, usePanelLayout } from "./map/MapInfoPanel";
+import { buildPanelContent } from "./map/selectionContent";
+export { nasaType } from "./map/selectionContent";
 import { PoiLayer } from "./map/PoiLayer";
 import { RouteLayer, type DrawnRoute } from "./map/RouteLayer";
 import { TeamPins } from "./map/TeamPins";
@@ -22,7 +28,7 @@ export const MarsCRS: L.CRS = L.extend({}, L.CRS.Simple, {
   infinite: false,
 });
 
-export type LayerKey = "terrain" | "elevation" | "slope" | "geology" | "rover" | "weather" | "hirise_img" | "geomap" | "minerals" | "photos";
+export type LayerKey = "terrain" | "elevation" | "slope" | "geology" | "rover" | "weather" | "hirise_img" | "geomap" | "minerals" | "photos" | "water";
 export type PlaceMode = StopRole | null;
 
 interface Props {
@@ -71,51 +77,18 @@ interface Props {
   routeLabel?: string;
   /** Latest weather reading (rendered in a movable map panel) */
   weather?: ReactNode;
-  /** Location the user clicked in the planner: shows a popup with Set Destination / Set Start / Add Waypoint. */
-  pick?: { lon: number; lat: number; key: number } | null;
+  /** Location the user clicked in the planner: shown in the information panel with Set Destination / Set Start / Add Waypoint. */
+  pick?: { lon: number; lat: number } | null;
   onPickRole?: (role: StopRole, lon: number, lat: number) => void;
   onPickSlot?: (slot: TeamSlot, lon: number, lat: number) => void;
   onPickClose?: () => void;
-}
-
-/** Popup for an arbitrary clicked map location (planner only). Stays open until an action or the close button. */
-function PickPopup({ pick, team, onRole, onSlot, onClose }: { pick: { lon: number; lat: number; key: number }; team: boolean; onRole?: Props["onPickRole"]; onSlot?: Props["onPickSlot"]; onClose?: () => void }) {
-  return (
-    <Popup
-      key={pick.key}
-      position={[pick.lat, pick.lon]}
-      closeOnClick={false}
-      autoClose={false}
-      autoPan
-      className="pick-popup"
-      eventHandlers={{ remove: () => onClose?.() }}
-    >
-      <div className="pick">
-        <div className="pick-head">
-          <span className="pick-icon"><Icon name="pin" size={18} /></span>
-          <div>
-            <b>Selected location</b>
-            <span>{formatLat(pick.lat, 3)}, {formatLon(pick.lon, 3)}</span>
-          </div>
-        </div>
-        {team ? (
-          <div className="pick-actions team">
-            <button className="pick-btn primary" onClick={() => onSlot?.("aDest", pick.lon, pick.lat)}><Icon name="pin" size={16} />A destination</button>
-            <button className="pick-btn" onClick={() => onSlot?.("bDest", pick.lon, pick.lat)}><Icon name="pin" size={16} />B destination</button>
-            <button className="pick-btn" onClick={() => onSlot?.("meet", pick.lon, pick.lat)}><Icon name="target" size={16} />Rendezvous</button>
-            <button className="pick-btn" onClick={() => onSlot?.("aStart", pick.lon, pick.lat)}><Icon name="flag" size={16} />A start</button>
-            <button className="pick-btn" onClick={() => onSlot?.("bStart", pick.lon, pick.lat)}><Icon name="flag" size={16} />B start</button>
-          </div>
-        ) : (
-          <div className="pick-actions">
-            <button className="pick-btn primary" onClick={() => onRole?.("destination", pick.lon, pick.lat)}><Icon name="pin" size={18} />Set Destination</button>
-            <button className="pick-btn" onClick={() => onRole?.("start", pick.lon, pick.lat)}><Icon name="flag" size={18} />Set Start</button>
-            <button className="pick-btn" onClick={() => onRole?.("waypoint", pick.lon, pick.lat)}><Icon name="route" size={18} />Add Waypoint</button>
-          </div>
-        )}
-      </div>
-    </Popup>
-  );
+  /** Ancient Water Evidence layer */
+  water?: WaterFile | null;
+  waterOpacity?: number;
+  waterZone?: string | null;
+  onWaterDestination?: (z: WaterZone) => void;
+  /** Remove a route stop (from the stop's details in the information panel) */
+  onRemoveStop?: (id: string) => void;
 }
 
 const hiriseLabel = L.divIcon({ className: "", html: `<div class="hirise-label">HiRISE Coverage (4 m routing grid)</div>`, iconSize: [0, 0], iconAnchor: [-8, -8] });
@@ -129,20 +102,19 @@ const cameraIcon = L.divIcon({
 
 const ROLE_LABEL: Record<StopRole, string> = { start: "start", waypoint: "waypoint", destination: "destination" };
 
-function stopIcon(role: StopRole, num?: number) {
+const cameraIconSel = L.divIcon({ ...cameraIcon.options, html: (cameraIcon.options.html as string).replace('class="cam-pin"', 'class="cam-pin is-selected"') });
+
+/** Selection highlight drawn under a selected marker, and the pin for a clicked spot. Never interactive. */
+const ringIcon = L.divIcon({ className: "sel-ring-icon", html: `<div class="sel-ring"></div>`, iconSize: [0, 0], iconAnchor: [0, 0] });
+const pointRingIcon = L.divIcon({ className: "sel-ring-icon", html: `<div class="sel-ring"></div><div class="sel-dot"></div>`, iconSize: [0, 0], iconAnchor: [0, 0] });
+
+function stopIcon(role: StopRole, num?: number, selected = false) {
   return L.divIcon({
     className: "",
-    html: `<div class="stop-pin stop-${role}"><span>${num ?? ""}</span></div>`,
+    html: `<div class="stop-pin stop-${role}${selected ? " is-selected" : ""}"><span>${num ?? ""}</span></div>`,
     iconSize: [26, 34],
     iconAnchor: [13, 32],
   });
-}
-
-/** NASA's own sample-table wording; the igneous/sedimentary qualifier is a campaign-geology summary. */
-export function nasaType(t?: string) {
-  if (!t) return "";
-  if (t.startsWith("Rock core")) return "Rock Core";
-  return t;
 }
 
 function typeClass(t?: string) {
@@ -166,12 +138,6 @@ const poiIcon = (p: Poi, planning: boolean) => {
   return p.category === "landing"
     ? L.divIcon({ className: "poi-marker", html: `<div class="poi-pin landing"></div>${label}`, iconSize: [18, 18], iconAnchor: [9, 9] })
     : L.divIcon({ className: "poi-marker", html: `<div class="poi-pin ${typeClass(p.type)}"></div>${label}`, iconSize: [16, 16], iconAnchor: [8, 8] });
-};
-
-/** Run a popup action, then close the popup it came from. */
-const thenClose = (fn: () => void) => (e: React.MouseEvent<HTMLButtonElement>) => {
-  fn();
-  (e.currentTarget.closest(".leaflet-popup")?.querySelector(".leaflet-popup-close-button") as HTMLElement | null)?.click();
 };
 
 function aoiBounds(m: Manifest) {
@@ -251,7 +217,9 @@ function Controller({ manifest, flyTarget, onMapClick, onCursor, fit }: Pick<Pro
     // Keep Leaflet in sync when panels, drawers or the mobile sheet resize the map, and recompute limits.
     const el = map.getContainer();
     const ro = new ResizeObserver(() => {
-      map.invalidateSize({ animate: false });
+      // pan: false keeps the top-left corner fixed, so when the dock or a sheet changes the map's height the
+      // terrain on screen stays where it is (Leaflet's default keeps the centre, which shifts everything).
+      map.invalidateSize({ animate: false, pan: false });
       const sz = map.getSize();
       if (lastSize.current && lastSize.current.equals(sz)) return;
       lastSize.current = sz;
@@ -278,13 +246,12 @@ function Controller({ manifest, flyTarget, onMapClick, onCursor, fit }: Pick<Pro
     if (fitted.current) map.flyToBounds(fit, { paddingTopLeft: [60, 70], paddingBottomRight: [80, 70], maxZoom: 16, duration: 0.7 });
   }, [map, fit]);
   useMapEvents({
-    click: (e) => onMapClick(e.latlng.lng, e.latlng.lat),
-    // The pointer over an open popup is not "on the ground": skip the read-out so moving inside a popup
-    // does not re-render the whole app on every pixel.
-    mousemove: (e) => {
-      if ((e.originalEvent?.target as Element | null)?.closest?.(".leaflet-popup")) return;
-      onCursor([e.latlng.lng, e.latlng.lat]);
+    click: (e) => {
+      // Once the user has picked something, a later resize must not snap the map back to the default framing.
+      touched.current = true;
+      onMapClick(e.latlng.lng, e.latlng.lat);
     },
+    mousemove: (e) => onCursor([e.latlng.lng, e.latlng.lat]),
     mouseout: () => onCursor(null),
   });
   return null;
@@ -363,7 +330,7 @@ function ScaleBar() {
 }
 
 export function MapView(props: Props) {
-  const { manifest, pois, rover, layers, opacity, stops, route, hoverIndex, placeMode, flyTarget, onMapClick, onCursor, onPoiAction, onPlanTo, planning, hint } = props;
+  const { manifest, pois, rover, layers, opacity, stops, route, hoverIndex, placeMode, flyTarget, onMapClick, onCursor, planning, hint } = props;
   const routeColor = props.routeColor ?? "#76C9C2";
   const a = manifest.aoi;
   const L_ = manifest.layers;
@@ -397,6 +364,95 @@ export function MapView(props: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [leaflet, setLeaflet] = useState<L.Map | null>(null);
   const compact = useCompact();
+
+  /* ---- selection + information panel (replaces every Leaflet popup; never moves the map) ---- */
+  // Callbacks from App are new on every render (App re-renders on each mouse move for the cursor read-out);
+  // read them through a ref so the panel's buttons always call the latest one without re-creating anything.
+  const live = useRef(props);
+  live.current = props;
+  const [marked, setMarked] = useState<MapSelection | null>(null);
+  /** Explore view: the spot last clicked for the terrain read-out (ring only; details are in the Explore panel). */
+  const [probePt, setProbePt] = useState<{ lon: number; lat: number } | null>(null);
+  const mapRef = useRef<L.Map | null>(null);
+  mapRef.current = leaflet;
+  const dblTimer = useRef(0);
+  useEffect(() => () => window.clearTimeout(dblTimer.current), []);
+  const select = useCallback((s: MapSelection | null) => {
+    setMarked(s);
+    if (!s) return;
+    live.current.onPickClose?.(); // a marker replaces a clicked spot
+    // Leaflet turns ANY two taps within 200 ms into a double-tap zoom, even taps on two different markers, so
+    // quickly switching between markers on a phone zoomed the map. A tap that selects something is not the
+    // first half of a zoom gesture: pause double-click zoom for a moment (double-tapping the ground still zooms).
+    const m = mapRef.current;
+    if (m?.doubleClickZoom && (m.doubleClickZoom.enabled() || dblTimer.current)) {
+      m.doubleClickZoom.disable();
+      window.clearTimeout(dblTimer.current);
+      dblTimer.current = window.setTimeout(() => {
+        dblTimer.current = 0;
+        m.doubleClickZoom.enable();
+      }, 450);
+    }
+  }, []);
+  const closePanel = useCallback(() => {
+    setMarked(null);
+    live.current.onPickClose?.();
+  }, []);
+  // The planner's clicked spot comes from App (it also handles placement mode); markers are selected here.
+  const sel: MapSelection | null = marked ?? (planning && props.pick ? { kind: "point", lon: props.pick.lon, lat: props.pick.lat } : null);
+  const selApi = useMemo<MapSelectionApi>(() => ({ sel, select }), [sel, select]);
+  useEffect(() => {
+    setMarked(null);
+    setProbePt(null);
+  }, [planning, props.teamMode]);
+  const handleMapClick = useCallback(
+    (lon: number, lat: number) => {
+      setMarked(null); // empty ground: drop a marker selection (the planner then shows the clicked spot)
+      setProbePt(!planning && !placeMode ? { lon, lat } : null);
+      onMapClick(lon, lat);
+    },
+    [planning, placeMode, onMapClick],
+  );
+  const panelLayoutState = usePanelLayout(wrapRef);
+  const panelContent = (() => {
+    // a selection whose layer is hidden is not shown (its marker is gone)
+    if (sel?.kind === "poi" || sel?.kind === "poi-group") if (!layers.geology) return null;
+    if (sel?.kind === "water" && !layers.water) return null;
+    if (sel?.kind === "photos" && !layers.photos) return null;
+    if (sel?.kind === "rover" && !layers.rover) return null;
+    return buildPanelContent(sel, {
+      pois,
+      planning,
+      teamMode: !!props.teamMode,
+      stops,
+      water: layers.water ? (props.water ?? null) : null,
+      photos: props.photos ?? null,
+      sites,
+      hazards: props.hazards ?? [],
+      map: leaflet,
+      select,
+      close: closePanel,
+      onPickRole: (r, lon, lat) => live.current.onPickRole?.(r, lon, lat),
+      onPickSlot: (s, lon, lat) => live.current.onPickSlot?.(s, lon, lat),
+      onPoiAction: (p, r) => live.current.onPoiAction(p, r),
+      onTeamSlot: (p, s) => live.current.onTeamSlot?.(p, s),
+      onPlanTo: (p) => live.current.onPlanTo(p),
+      onOpenGroundView: props.onOpenGroundView ? (id) => live.current.onOpenGroundView?.(id) : undefined,
+      onWaterDestination: props.onWaterDestination ? (z) => live.current.onWaterDestination?.(z) : undefined,
+      onRemoveStop: props.onRemoveStop ? (id) => live.current.onRemoveStop?.(id) : undefined,
+    });
+  })();
+  // a marker selection that no longer exists (stop removed, route re-planned, layer hidden) is dropped
+  useEffect(() => {
+    if (marked && !panelContent) setMarked(null);
+  }, [marked, panelContent]);
+  const panelSide = !!panelContent && panelLayoutState.layout === "side";
+  // where the selection ring goes (samples and route warnings have their own highlight)
+  const ring = (() => {
+    if (!panelContent?.anchor) return probePt;
+    if (sel?.kind === "poi" || sel?.kind === "poi-group" || sel?.kind === "hazard" || sel?.kind === "hazard-group") return null;
+    return panelContent.anchor;
+  })();
   // what the panels should keep clear of, in map-container pixels: stops and routes matter most
   const avoidPoints = useCallback((): WeightedPoint[] => {
     if (!leaflet) return [];
@@ -480,7 +536,12 @@ export function MapView(props: Props) {
   ];
 
   return (
-    <div ref={wrapRef} className={`map-wrap ${placeMode ? "placing" : planning ? "planning" : "inspecting"} ${compact ? "panels-compact" : ""}`}>
+    <div
+      ref={wrapRef}
+      className={`map-wrap ${placeMode ? "placing" : planning ? "planning" : "inspecting"} ${compact ? "panels-compact" : ""} ${panelSide ? "mi-open-side" : ""}`}
+      style={panelSide ? ({ "--mi-w": `${panelLayoutState.width}px` } as React.CSSProperties) : undefined}
+    >
+      <MapSelectionContext.Provider value={selApi}>
       <MapContainer
         crs={MarsCRS}
         center={[(a.lat_min + a.lat_max) / 2, (a.lon_min + a.lon_max) / 2]}
@@ -496,7 +557,7 @@ export function MapView(props: Props) {
         className="map"
       >
         <MapGrab onMap={setLeaflet} />
-        <Controller manifest={manifest} flyTarget={flyTarget} onMapClick={onMapClick} onCursor={onCursor} fit={fit} />
+        <Controller manifest={manifest} flyTarget={flyTarget} onMapClick={handleMapClick} onCursor={onCursor} fit={fit} />
         <Pane name="terrain" style={{ zIndex: 200 }}>
           {layers.terrain && L_.terrain.bounds && <ImageOverlay url={`/data/${L_.terrain.file}`} bounds={L_.terrain.bounds} />}
           {layers.hirise_img && L_.hirise_ortho?.bounds && <ImageOverlay url={`/data/${L_.hirise_ortho.file}`} bounds={L_.hirise_ortho.bounds} />}
@@ -534,6 +595,23 @@ export function MapView(props: Props) {
             />
           </Pane>
         )}
+        {layers.water && props.water && L_.water_evidence?.bounds && (
+          <Pane name="water-evidence" style={{ zIndex: 237 }}>
+            <ImageOverlay url={`/data/${L_.water_evidence.file}`} bounds={L_.water_evidence.bounds} opacity={props.waterOpacity ?? 0.75} className="pixelated" />
+            {props.water.zones.map((z) => (
+              <CircleMarker
+                key={z.id}
+                center={[z.target[1], z.target[0]]}
+                radius={props.waterZone === z.id || (sel?.kind === "water" && sel.id === z.id) ? 9 : 7}
+                pathOptions={{ color: "#F1EDF5", weight: 2, fillColor: "#7C68CE", fillOpacity: 0.9 }}
+                bubblingMouseEvents={false}
+                eventHandlers={{ click: () => select({ kind: "water", id: z.id }) }}
+              >
+                <Tooltip permanent direction="right" offset={[8, 0]} className="water-zone-label">{z.id}</Tooltip>
+              </CircleMarker>
+            ))}
+          </Pane>
+        )}
         {layers.minerals && minerals?.bounds && (
           <Pane name="minerals" style={{ zIndex: 238 }}>
             <ImageOverlay url={`/data/${minerals.file}`} bounds={minerals.bounds} opacity={props.mineralOpacity ?? 0.85} className="pixelated" />
@@ -565,13 +643,33 @@ export function MapView(props: Props) {
         )}
         {layers.rover && (
           <Pane name="rover" style={{ zIndex: 400 }}>
+            {/* the visible dotted track */}
             <GeoJSON
               key={`rover-${maxSol}`}
               data={roverShown}
-              style={() => ({ color: "#F1EDF5", weight: 2.2, opacity: 0.8, dashArray: "1 5", lineCap: "round" })}
-              onEachFeature={(f, layer) =>
-                layer.bindTooltip(`Perseverance drive · sol ${(f.properties as { sol: number }).sol}`, { sticky: true, className: "map-tip" })
-              }
+              interactive={false}
+              style={() => ({ color: "#F1EDF5", weight: 2.2, opacity: 0.8, dashArray: "1 5", lineCap: "round", interactive: false })}
+            />
+            {/* the selected sol's drive, drawn solid on top */}
+            {sel?.kind === "rover" && (
+              <GeoJSON
+                key={`rover-sel-${sel.sol}-${maxSol}`}
+                data={{ ...roverShown, features: roverShown.features.filter((f) => (f.properties as { sol?: number } | null)?.sol === sel.sol) } as GeoJSON.FeatureCollection}
+                interactive={false}
+                style={() => ({ color: "#A99BDD", weight: 4.5, opacity: 1, lineCap: "round", interactive: false })}
+              />
+            )}
+            {/* an invisible, wider line on top that is easy to hit with a mouse or a finger (a 2 px dotted line is not) */}
+            <GeoJSON
+              key={`rover-hit-${maxSol}`}
+              data={roverShown}
+              style={() => ({ color: "#F1EDF5", weight: 14, opacity: 0, lineCap: "round" })}
+              onEachFeature={(f, layer) => {
+                const pr = f.properties as { sol: number; length_m?: number };
+                layer.bindTooltip(`Perseverance drive · sol ${pr.sol}`, { sticky: true, className: "map-tip" });
+                (layer as L.Path).options.bubblingMouseEvents = false; // a click on the track selects the track, not the ground under it
+                layer.on("click", (e: L.LeafletMouseEvent) => select({ kind: "rover", sol: pr.sol, length_m: pr.length_m ?? null, lon: e.latlng.lng, lat: e.latlng.lat }));
+              }}
             />
           </Pane>
         )}
@@ -580,77 +678,13 @@ export function MapView(props: Props) {
           {hoverPt && <CircleMarker center={[hoverPt[1], hoverPt[0]]} radius={7} pathOptions={{ color: "#F1EDF5", fillColor: "#D98EBA", fillOpacity: 1, weight: 2 }} />}
         </Pane>
         {layers.geology && (
-          <PoiLayer
-            pois={pois}
-            icons={icons}
-            body={(p) => (
-              <div className="popup">
-                  <div className="popup-title">
-                    {p.number ? <span className="num">#{p.number}</span> : null}
-                    {p.name}
-                  </div>
-                  <div className="popup-badges">
-                    <KindBadge kind="real" title="Name, sol and type from NASA" />
-                    {p.position_quality === "estimated" && <KindBadge kind="estimated" title={p.position_method} />}
-                  </div>
-                  {p.category === "sample" ? (
-                    <dl>
-                      <dt>Type</dt><dd>{p.type}<span className="dd-note">NASA's table: {nasaType(p.type)}</span></dd>
-                      <dt>Campaign</dt><dd>{p.campaign}</dd>
-                      <dt>Sealed</dt><dd><Term k="sol">Sol</Term> {p.sol_sealed} · {p.date_sealed}</dd>
-                      {p.core_length_cm ? (<><dt>Core length</dt><dd>{p.core_length_cm} cm</dd></>) : null}
-                      <dt>Position</dt><dd>{formatLat(p.lat)} · {formatLon(p.lon)}</dd>
-                    </dl>
-                  ) : (
-                    <p className="popup-desc">{p.description}</p>
-                  )}
-                  {p.position_method && (
-                    <p className="popup-note">
-                      {p.position_method}
-                      {sampleCheck(props.photos ?? null, p.id)?.corroborated ? ". NASA images from the sealing sol were taken at this same localization." : ""}
-                    </p>
-                  )}
-                  {photosForPoi(props.photos ?? null, p.id).length > 0 && props.onOpenGroundView && (
-                    <button className="btn-mini lav gv-open" onClick={thenClose(() => props.onOpenGroundView?.(p.id))}>
-                      <Icon name="camera" size={13} /> Ground View · {photosForPoi(props.photos ?? null, p.id).length} NASA photos
-                    </button>
-                  )}
-                  {planning && props.teamMode ? (
-                    <>
-                      <div className="popup-q">Use this spot for the team:</div>
-                      <div className="popup-actions">
-                        <button className="btn-mini teal" onClick={thenClose(() => props.onTeamSlot?.(p, "aDest"))}>A destination</button>
-                        <button className="btn-mini lav" onClick={thenClose(() => props.onTeamSlot?.(p, "bDest"))}>B destination</button>
-                        <button className="btn-mini rose" onClick={thenClose(() => props.onTeamSlot?.(p, "meet"))}>Rendezvous</button>
-                        <button className="btn-mini teal" onClick={thenClose(() => props.onTeamSlot?.(p, "aStart"))}>A start</button>
-                        <button className="btn-mini lav" onClick={thenClose(() => props.onTeamSlot?.(p, "bStart"))}>B start</button>
-                      </div>
-                    </>
-                  ) : planning ? (
-                    <>
-                      <div className="popup-q">Use this spot in your Marswalk:</div>
-                      <div className="popup-actions">
-                        <button className="btn-mini rose" onClick={thenClose(() => onPoiAction(p, "destination"))}>Set destination</button>
-                        <button className="btn-mini teal" onClick={thenClose(() => onPoiAction(p, "start"))}>Set as start</button>
-                        <button className="btn-mini lav" onClick={thenClose(() => onPoiAction(p, "waypoint"))}>Add waypoint</button>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="popup-actions">
-                      <button className="btn-mini rose" onClick={thenClose(() => onPlanTo(p))}>
-                        <Icon name="route" size={13} /> Plan a walk here
-                      </button>
-                    </div>
-                  )}
-                </div>
-            )}
-          />
+          <PoiLayer pois={pois} icons={icons} />
         )}
         {layers.photos &&
           sites.map((s) => (
             <Fragment key={s.rmc}>
               <CircleMarker center={[s.lat, s.lon]} radius={2.5} pathOptions={{ color: "#131522", fillColor: "#E6C79C", fillOpacity: 1, weight: 1, interactive: false }} />
-              <Marker position={[s.lat, s.lon]} icon={cameraIcon} zIndexOffset={600} eventHandlers={{ click: () => props.onOpenGroundView?.(s.photos[0].poi_id) }}>
+              <Marker position={[s.lat, s.lon]} icon={sel?.kind === "photos" && sel.rmc === s.rmc ? cameraIconSel : cameraIcon} zIndexOffset={600} eventHandlers={{ click: () => select({ kind: "photos", rmc: s.rmc }) }}>
                 <Tooltip direction="top" offset={[10, -26]} className="map-tip">
                   {s.photos.length} NASA photo{s.photos.length > 1 ? "s" : ""} · rover localization {s.rmc} · sol {s.photos[0].sol}
                 </Tooltip>
@@ -668,26 +702,39 @@ export function MapView(props: Props) {
         )}
         {props.teamPins && props.teamPins.length > 0 && <TeamPins pins={props.teamPins} />}
         {[...stops.filter((s) => s.role === "start"), ...stops.filter((s) => s.role === "waypoint"), ...stops.filter((s) => s.role === "destination")].map((s, i, all) => (
-          <Marker key={s.id} position={[s.lat, s.lon]} icon={stopIcon(s.role, all.length > 1 ? i + 1 : undefined)} zIndexOffset={1000} interactive={false}>
+          <Marker
+            key={s.id}
+            position={[s.lat, s.lon]}
+            icon={stopIcon(s.role, all.length > 1 ? i + 1 : undefined, sel?.kind === "stop" && sel.id === s.id)}
+            zIndexOffset={1000}
+            title={s.name}
+            eventHandlers={{ click: () => select({ kind: "stop", id: s.id }) }}
+          >
             <Tooltip permanent direction="auto" offset={[0, -18]} className={`stop-label label-${s.role}`}>
               {all.length > 1 ? `${i + 1} · ` : ""}{s.name}
             </Tooltip>
           </Marker>
         ))}
-        {planning && props.pick && (
-          <PickPopup pick={props.pick} team={!!props.teamMode} onRole={props.onPickRole} onSlot={props.onPickSlot} onClose={props.onPickClose} />
+        {ring && (
+          <Pane name="selection" style={{ zIndex: 590 }}>
+            <Marker position={[ring.lat, ring.lon]} icon={sel?.kind === "point" || (!panelContent && probePt) ? pointRingIcon : ringIcon} interactive={false} keyboard={false} pane="selection" />
+          </Pane>
         )}
         <MapButtons manifest={manifest} fit={fit} />
         <ScaleBar />
       </MapContainer>
+      </MapSelectionContext.Provider>
 
       <MapPanels map={leaflet} wrapRef={wrapRef} panels={panels} points={avoidPoints} placeKey={placeKey} compact={compact} />
+
+      <MapInfoPanel content={panelContent} layout={panelLayoutState.layout} width={panelLayoutState.width} map={leaflet} onClose={closePanel} />
 
       <div className="credit">
         CTX: NASA/JPL/MSSS · HiRISE: NASA/JPL/UArizona · DTMs: USGS Astrogeology · Traverse: NASA/JPL-Caltech
         {layers.hirise_img && " · HiRISE mosaic via NASA Mars Trek"}
         {layers.geomap && " · Geology: USGS SIM 3464 (Sun & Stack 2020)"}
-        {layers.minerals && " · CRISM: NASA/JHU-APL, PDS Geosciences"}
+        {(layers.minerals || layers.water) && " · CRISM: NASA/JHU-APL, PDS Geosciences"}
+        {layers.water && !layers.geomap && " · Geology: USGS SIM 3464"}
         {layers.photos && " · Photos: NASA/JPL-Caltech"}
       </div>
     </div>

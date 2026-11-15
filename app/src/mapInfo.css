@@ -1,0 +1,171 @@
+/* =====================================================================
+   Map information panel (components/map/MapInfoPanel.tsx)
+   Replaces Leaflet popups. Desktop: fixed panel on the right of the map.
+   Phones and narrow maps: bottom sheet. Only .mi-body scrolls.
+   ===================================================================== */
+
+.map-info {
+  --mi-tone: var(--lav);
+  --mi-tone-soft: var(--lav-soft);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  color: var(--ivory);
+  background: linear-gradient(180deg, rgba(44, 46, 71, 0.97), rgba(34, 36, 56, 0.97));
+  border: 1px solid var(--line-2);
+  box-shadow: 0 18px 44px rgba(5, 6, 14, 0.45), 0 0 0 1px rgba(169, 155, 221, 0.06) inset;
+  backdrop-filter: blur(10px);
+  outline: none;
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+.map-info:focus-visible { box-shadow: 0 18px 44px rgba(5, 6, 14, 0.45), 0 0 0 2px var(--lav-line); }
+.map-info.tone-turq { --mi-tone: var(--turq); --mi-tone-soft: var(--turq-soft); }
+.map-info.tone-rose { --mi-tone: var(--rose); --mi-tone-soft: var(--rose-soft); }
+.map-info.tone-sand { --mi-tone: var(--sand); --mi-tone-soft: rgba(230, 199, 156, 0.15); }
+.map-info.tone-peach { --mi-tone: var(--peach); --mi-tone-soft: rgba(233, 191, 159, 0.15); }
+.map-info.tone-sky { --mi-tone: var(--sky); --mi-tone-soft: rgba(169, 200, 230, 0.15); }
+
+/* ---- desktop: right side of the map, inside the map area, never taller than it ---- */
+.map-info.mi-side {
+  position: absolute;
+  z-index: 880; /* above the map controls (800) and movable panels (660) */
+  top: 12px;
+  right: 12px;
+  max-height: calc(100% - 24px - var(--dock-h, 0px));
+  border-radius: 20px;
+  animation: mi-in 0.18s var(--ease);
+}
+@keyframes mi-in { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: none; } }
+
+/* map controls on the right make room for the panel instead of hiding under it */
+.map-wrap.mi-open-side .map-buttons,
+.map-wrap.mi-open-side .scalebar,
+.map-wrap.mi-open-side .hz-toggle { right: calc(var(--mi-w, 340px) + 26px); transition: right 0.18s var(--ease); }
+
+/* ---- phones / narrow maps: bottom sheet, always inside the viewport ---- */
+.map-info.mi-sheet {
+  position: fixed;
+  z-index: 3200; /* above the planner/explore sheets, below drawers (3400+) and dialogs (5000) */
+  left: 0;
+  right: 0;
+  bottom: 0;
+  max-height: min(56dvh, 520px);
+  border-radius: 22px 22px 0 0;
+  border-bottom: 0;
+  padding-bottom: env(safe-area-inset-bottom);
+  animation: mi-up 0.2s var(--ease);
+  transition: max-height 0.2s var(--ease), transform 0.12s linear;
+  overscroll-behavior: contain;
+}
+.map-info.mi-sheet.is-expanded { max-height: calc(100dvh - 140px); }
+.map-info.mi-sheet.is-dragging { transition: none; }
+@keyframes mi-up { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+@media (max-width: 720px) {
+  /* sit above the bottom navigation rail */
+  .map-info.mi-sheet { bottom: calc(62px + env(safe-area-inset-bottom)); padding-bottom: 0; border-radius: 22px; left: 6px; right: 6px; border-bottom: 1px solid var(--line-2); }
+  .map-info.mi-sheet.is-expanded { max-height: calc(100dvh - 62px - 76px); }
+}
+.mi-handle { flex: none; display: flex; justify-content: center; padding: 8px 0 2px; touch-action: none; cursor: grab; }
+.mi-handle button { border: 0; background: none; padding: 6px 28px; border-radius: 999px; cursor: grab; }
+.mi-handle button:focus-visible { outline: 2px solid var(--lav-line); }
+.mi-grip { display: block; width: 44px; height: 5px; border-radius: 3px; background: rgba(241, 237, 245, 0.28); }
+
+/* ---- header ---- */
+.mi-head { flex: none; display: grid; grid-template-columns: auto 1fr auto; align-items: start; gap: 12px; padding: 18px 16px 10px 18px; }
+.mi-sheet .mi-head { padding-top: 6px; }
+.mi-icon { width: 40px; height: 40px; border-radius: 13px; display: grid; place-items: center; background: var(--mi-tone-soft); color: var(--mi-tone); }
+.mi-titles { min-width: 0; }
+.mi-kicker { display: block; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--mi-tone); margin-bottom: 1px; }
+.mi-titles h2 { margin: 0; font-family: var(--font-display); font-size: 18px; font-weight: 800; line-height: 1.25; overflow-wrap: anywhere; }
+.mi-sub { margin-top: 4px; }
+.mi-coords { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.mi-coords svg { color: var(--muted); }
+.mi-close {
+  width: 44px; height: 44px; margin: -6px -6px 0 0; border-radius: 13px; border: 1px solid transparent; background: rgba(241, 237, 245, 0.05);
+  color: var(--text-2); display: grid; place-items: center; cursor: pointer; transition: background 0.15s, color 0.15s;
+}
+.mi-close:hover { background: var(--lav-soft); color: var(--ivory); border-color: var(--lav-line); }
+.mi-close:focus-visible { outline: 2px solid var(--lav); outline-offset: 1px; }
+.mi-badges { flex: none; display: flex; flex-wrap: wrap; gap: 5px; padding: 0 18px 10px 70px; }
+.mi-covered { flex: none; display: flex; align-items: center; gap: 7px; margin: 0 14px 8px; padding: 7px 10px; border-radius: 11px; background: rgba(241, 237, 245, 0.05); border: 1px dashed var(--line-2); font-size: 12px; color: var(--text-2); }
+.mi-covered .link-btn { margin-left: auto; font-size: 12px; white-space: nowrap; }
+
+/* ---- body: the only scroll area ---- */
+.mi-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 4px 18px 16px;
+  border-top: 1px solid var(--line);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(169, 155, 221, 0.35) transparent;
+}
+.mi-body > :first-child { margin-top: 10px; }
+.mi-lead { margin: 10px 0 12px; color: var(--text-2); }
+.mi-q { font-size: 12px; color: var(--muted); margin: 0 0 6px; }
+.mi-facts { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 10px 0 4px; font-size: 13px; }
+.mi-facts dt { color: var(--muted); }
+.mi-facts dd { margin: 0; }
+.mi-facts em { font-style: normal; color: var(--dim); font-size: 12px; }
+.mi-sec { margin-top: 14px; }
+.mi-sec > span { display: block; font-size: 11.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+.mi-sec ul { margin: 0; padding-left: 18px; color: var(--text-2); }
+.mi-sec li + li { margin-top: 4px; }
+
+/* content reused from the old popups: no nested scroll, no duplicate titles, roomier text */
+.map-info .popup { font-size: 13px; }
+.map-info .popup dl { gap: 6px 14px; font-size: 13px; }
+.map-info .popup-desc { line-height: 1.6; color: var(--text-2); }
+.map-info .popup-note { font-size: 11.5px; line-height: 1.5; }
+.map-info .group-list { max-height: none; overflow: visible; gap: 6px; margin-bottom: 0; }
+.map-info .group-item { padding: 10px 12px; min-height: 44px; }
+.map-info .group-popup > .popup-title { display: none; }
+.map-info .group-popup > .popup-note { margin-top: 10px; }
+.map-info .back-link { margin: 10px 0 2px; font-size: 12.5px; }
+.map-info .hz-pop { padding-top: 6px; }
+.map-info .wcell { margin-top: 4px; }
+
+/* ---- actions: pinned under the body so they are always reachable ---- */
+.mi-actions { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 12px 16px 16px; border-top: 1px solid var(--line); background: rgba(19, 21, 34, 0.25); border-radius: 0 0 20px 20px; }
+.mi-sheet .mi-actions { border-radius: 0; padding-bottom: calc(14px + env(safe-area-inset-bottom)); }
+@media (max-width: 720px) { .mi-sheet .mi-actions { border-radius: 0 0 22px 22px; padding-bottom: 14px; } }
+.mi-actions .mi-q { margin: 0; }
+.mi-act-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.mi-actions .btn-mini { padding: 9px 13px; font-size: 12.5px; min-height: 40px; border-radius: 11px; }
+.mi-actions .gv-open { align-self: flex-start; }
+.mi-act-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.mi-act-grid.five { grid-template-columns: repeat(3, 1fr); }
+.mi-btn {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; padding: 10px 8px; min-height: 64px;
+  border-radius: 13px; border: 1px solid var(--line-2); background: rgba(241, 237, 245, 0.04); color: var(--ivory);
+  font-size: 12.5px; font-weight: 700; line-height: 1.2; text-align: center; cursor: pointer; transition: background 0.15s, border-color 0.15s;
+}
+.mi-btn:hover { background: var(--lav-soft); border-color: var(--lav-line); }
+.mi-btn:focus-visible { outline: 2px solid var(--lav); outline-offset: 1px; }
+.mi-btn.primary { background: var(--turq); border-color: var(--turq); color: var(--navy); }
+.mi-btn.primary:hover { filter: brightness(1.06); background: var(--turq); }
+.mi-btn.wide { flex-direction: row; min-height: 46px; gap: 8px; font-size: 13.5px; }
+
+/* ---- selection highlight on the map ---- */
+.sel-ring-icon { pointer-events: none; }
+.sel-ring {
+  position: absolute; left: -17px; top: -17px; width: 34px; height: 34px; border-radius: 50%;
+  border: 2.5px solid var(--ivory); box-shadow: 0 0 0 3px rgba(169, 155, 221, 0.55), 0 0 18px rgba(169, 155, 221, 0.6);
+  animation: sel-breathe 2.4s ease-in-out infinite;
+}
+.sel-dot { position: absolute; left: -5px; top: -5px; width: 10px; height: 10px; border-radius: 50%; background: var(--rose); border: 2px solid var(--ivory); box-shadow: 0 1px 4px rgba(5, 6, 14, 0.6); }
+@keyframes sel-breathe { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.12); opacity: 0.8; } }
+.cam-pin.is-selected { transform: scale(1.18); box-shadow: 0 0 0 3px var(--lav), 0 3px 10px rgba(5, 6, 14, 0.45); }
+.stop-pin.is-selected { filter: drop-shadow(0 0 6px rgba(241, 237, 245, 0.85)) drop-shadow(0 2px 3px rgba(5, 6, 14, 0.5)); transform: scale(1.12); transform-origin: 50% 100%; }
+
+@media (prefers-reduced-motion: reduce) {
+  .map-info.mi-side, .map-info.mi-sheet { animation: none; }
+  .sel-ring { animation: none; }
+}
+@media (max-width: 380px) {
+  .mi-act-grid, .mi-act-grid.five { grid-template-columns: repeat(2, 1fr); }
+  .mi-act-grid > .primary:first-child { grid-column: span 2; }
+}

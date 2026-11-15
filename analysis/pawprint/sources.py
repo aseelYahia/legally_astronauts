@@ -127,6 +127,11 @@ EXTRA_DATASETS = {
         "kind": "real",
         "note": "Mapped on a semi-controlled CTX mosaic; USGS states random offsets of about 100-200 m from the Mars 2020 "
         "controlled CTX mosaic. Boundaries are approximate here and are not used for routing.",
+        "verification": "Polygons are read from an ArcGIS feature service with no owner/attribution text. On 2026-11-15 they were "
+        "checked against the OFFICIAL USGS database (sim3464_database.zip, Nili.gdb layer GeoUnits_v1): same CRS (MTM clon 77.5E, "
+        "Mars 2000 sphere), identical unit codes and names, per-unit IoU >= 0.9999 in the AOI, boundary differences <= 0.04 m; "
+        "unit interpretations quoted by PAWPRINT appear on the official map sheet (sim3464.pdf). One clipping bug in PAWPRINT "
+        "(a dropped hole, 0.021 km2 drawn as both Nue and NHjf2) was fixed. Script: analysis/scripts/validate_geology_official.py.",
     },
     "crism_mtrdr": {
         "title": "MRO CRISM map-projected targeted reduced data records (MTRDR), refined summary parameters (SR)",
@@ -157,5 +162,32 @@ EXTRA_DATASETS = {
         "dates": "Product created 2020-08-03 (Mars Trek catalog).",
         "kind": "real",
         "note": "Fetched as Mars Trek WMTS tiles at zoom 15 (~1.3 m/px), i.e. downsampled from the 25 cm source.",
+    },
+    "water_rejected": {
+        "title": "Datasets investigated for the Ancient Water Evidence map but NOT used",
+        "kind": "unavailable",
+        "items": [
+            {"key": "sharad", "name": "MRO SHARAD orbital radar",
+             "url": "https://pds-geosciences.wustl.edu/mro/mro-m-sharad-5-radargram-v2/mrosh_2101/document/rgram_processing.htm",
+             "why": "Footprint is about 3-6 km across-track (Fresnel zone; focusing cannot sharpen it) and 0.3-1 km along-track, "
+                    "while this whole area is about 7 x 5 km. Vertical resolution is 15 m in free space. Surface clutter from the crater "
+                    "rim and delta scarps would dominate, and no validated subsurface water or ice detection exists for this area. "
+                    "Using it would imply detail the data cannot support."},
+            {"key": "swim", "name": "SWIM (Subsurface Water Ice Mapping) ice-consistency maps",
+             "url": "https://swim.psi.edu/",
+             "why": "SWIM maps the likelihood of PRESENT-DAY buried water ice, using regional-scale (km to tens of km) inputs. It covers "
+                    "60S-60N, with the strongest signals poleward of about 40 degrees; Jezero is at 18.4N. It answers a different question "
+                    "(modern ice for resources), not ancient lake evidence, and is far coarser than this map."},
+            {"key": "rimfax", "name": "Mars 2020 RIMFAX ground-penetrating radar",
+             "url": "https://pds-geosciences.wustl.edu/missions/mars2020/rimfax.htm",
+             "why": "Real, archived PDS data exist along Perseverance's traverse, so this area IS covered, but only as 1-D radargrams under "
+                    "the rover's wheels. Turning them into a 2-D area score would invent values between tracks, and interpreting layering "
+                    "needs radargram processing that PAWPRINT does not do. They were not downloaded (large archive; ask first). "
+                    "Candidate future add-on: show the traverse segments that have RIMFAX coverage, linking to the PDS browse radargrams."},
+            {"key": "hirise_dtm", "name": "HiRISE DTM (1 m) for the landform term",
+             "url": "https://doi.org/10.5066/P9REJ9JN",
+             "why": "Used for routing, but it covers only the south-east window of this area. Mixing it into the score would create a "
+                    "resolution seam, so the landform term uses the CTX DTM (20 m), which covers everything."},
+        ],
     },
 }

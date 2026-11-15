@@ -4,6 +4,24 @@ import { groupBySeverity, WARNING_ICONS, warningInfo, type WarningIconKey } from
 import { Icon, KindBadge } from "../ui";
 import { SeverityIcon } from "./SafetyList";
 
+/** Bring `el` into view inside its nearest scrollable ancestor (a sheet or dock), never by scrolling the page or
+ *  anything else that contains the map. */
+function scrollWithinOwnArea(el: HTMLElement) {
+  let p = el.parentElement;
+  while (p && p !== document.body && p !== document.documentElement) {
+    if (p.querySelector(".leaflet-container")) return; // the page (or a column) that also holds the map: leave it alone
+    const o = getComputedStyle(p).overflowY;
+    if ((o === "auto" || o === "scroll") && p.scrollHeight > p.clientHeight + 1) {
+      const r = el.getBoundingClientRect();
+      const s = p.getBoundingClientRect();
+      if (r.top < s.top) p.scrollBy({ top: r.top - s.top - 8, behavior: "smooth" });
+      else if (r.bottom > s.bottom) p.scrollBy({ top: Math.min(r.bottom - s.bottom + 8, r.top - s.top - 8), behavior: "smooth" });
+      return;
+    }
+    p = p.parentElement;
+  }
+}
+
 const GROUP_TITLE: Record<Severity, { title: string; sub: string }> = {
   warning: { title: "Warnings", sub: "Look at these before you walk" },
   caution: { title: "Cautions", sub: "Worth a second look" },
@@ -48,13 +66,15 @@ export function WarningsBoard({
     onSelect(id);
   };
 
-  // A selection made elsewhere (e.g. a hazard marker on the map) scrolls its card into view.
+  // A selection made elsewhere (e.g. a hazard marker on the map) scrolls its card into view, but only inside the
+  // board's own scroll area. scrollIntoView also scrolled the planner PAGE, which pulled the map (and the
+  // warning's details panel on it) out of view the moment a marker was clicked.
   useEffect(() => {
     const own = clickedHere.current;
     clickedHere.current = false;
     if (!selectedId || own) return;
     const el = boardRef.current?.querySelector<HTMLElement>(`[data-alert-id="${CSS.escape(selectedId)}"]`);
-    el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    if (el) scrollWithinOwnArea(el);
   }, [selectedId]);
 
   return (

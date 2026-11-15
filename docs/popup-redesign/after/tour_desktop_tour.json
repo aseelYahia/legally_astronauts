@@ -1,0 +1,232 @@
+{
+  "tag": "tour_desktop",
+  "viewport": [
+    1440,
+    900
+  ],
+  "steps": {
+    "water_region": {
+      "drift_px": 0.0,
+      "move_events": 0,
+      "panel": {
+        "selection": "water:W1",
+        "layout": "side",
+        "title": "Jezero fan 2 unit, 0.8 km NE of Melyn",
+        "rect": [
+          715,
+          80,
+          372,
+          510
+        ],
+        "inViewport": true,
+        "bodyScrolls": true,
+        "nestedScrollAreas": 0,
+        "actionsVisible": true,
+        "covered": false,
+        "badges": [
+          "ESTIMATE"
+        ]
+      }
+    },
+    "water_cell": {
+      "drift_px": 0.0,
+      "move_events": 0,
+      "panel": {
+        "selection": "point:77.3940974,18.4781255",
+        "layout": "side",
+        "title": "Selected location",
+        "rect": [
+          715,
+          80,
+          372,
+          470
+        ],
+        "inViewport": true,
+        "bodyScrolls": false,
+        "nestedScrollAreas": 0,
+        "actionsVisible": true,
+        "covered": false,
+        "badges": []
+      }
+    },
+    "water_cell_expanded": {
+      "drift_px": 0.0,
+      "move_events": 0,
+      "panel": {
+        "selection": "point:77.3940974,18.4781255",
+        "layout": "side",
+        "title": "Selected location",
+        "rect": [
+          715,
+          80,
+          372,
+          510
+        ],
+        "inViewport": true,
+        "bodyScrolls": true,
+        "nestedScrollAreas": 0,
+        "actionsVisible": true,
+        "covered": false,
+        "badges": []
+      }
+    },
+    "water_cell_scrolled_to_end": {
+      "drift_px": 0.0,
+      "move_events": 0,
+      "panel": {
+        "selection": "point:77.3940974,18.4781255",
+        "layout": "side",
+        "title": "Selected location",
+        "rect": [
+          715,
+          80,
+          372,
+          510
+        ],
+        "inViewport": true,
+        "bodyScrolls": true,
+        "nestedScrollAreas": 0,
+        "actionsVisible": true,
+        "covered": false,
+        "badges": []
+      }
+    },
+    "rover_track": {
+      "drift_px": 0.0,
+      "move_events": 0,
+      "panel": {
+        "selection": "rover:360:77.4517354,18.4422199",
+        "layout": "side",
+        "title": "Drive on sol 360",
+        "rect": [
+          715,
+          80,
+          372,
+          380
+        ],
+        "inViewport": true,
+        "bodyScrolls": false,
+        "nestedScrollAreas": 0,
+        "actionsVisible": true,
+        "covered": false,
+        "badges": [
+          "NASA DATA"
+        ]
+      }
+    },
+    "photo_site": {
+      "drift_px": 0.0,
+      "move_events": 0,
+      "panel": {
+        "selection": "photos:3_386",
+        "layout": "side",
+        "title": "5 NASA photos taken here",
+        "rect": [
+          715,
+          80,
+          372,
+          333
+        ],
+        "inViewport": true,
+        "bodyScrolls": false,
+        "nestedScrollAreas": 0,
+        "actionsVisible": true,
+        "covered": false,
+        "badges": [
+          "NASA DATA"
+        ]
+      }
+    },
+    "pick_spot": {
+      "drift_px": 0.0,
+      "move_events": 0,
+      "panel": {
+        "selection": "point:77.4459229,18.4486962",
+        "layout": "side",
+        "title": "Selected location",
+        "rect": [
+          715,
+          80,
+          372,
+          265
+        ],
+        "inViewport": true,
+        "bodyScrolls": false,
+        "nestedScrollAreas": 0,
+        "actionsVisible": true,
+        "covered": false,
+        "badges": []
+      }
+    },
+    "route_warning": {
+      "drift_px": 0.0,
+      "move_events": 0,
+      "panel": {
+        "selection": "hazard:solo-lower_risk-moderate-slope-28",
+        "layout": "side",
+        "title": "Moderate slope 11.0\u00b0",
+        "rect": [
+          715,
+          80,
+          372,
+          510
+        ],
+        "inViewport": true,
+        "bodyScrolls": true,
+        "nestedScrollAreas": 0,
+        "actionsVisible": null,
+        "covered": false,
+        "badges": []
+      }
+    },
+    "route_stop": {
+      "drift_px": 0.0,
+      "move_events": 0,
+      "panel": {
+        "selection": "stop:smwhwnnci3",
+        "layout": "side",
+        "title": "Base Camp",
+        "rect": [
+          715,
+          80,
+          372,
+          251
+        ],
+        "inViewport": true,
+        "bodyScrolls": false,
+        "nestedScrollAreas": 0,
+        "actionsVisible": true,
+        "covered": false,
+        "badges": []
+      }
+    },
+    "rapid_switch_kinds": {
+      "drift_px": 0.0,
+      "move_events": 0,
+      "panel": {
+        "selection": "stop:smwhwobvk4",
+        "layout": "side",
+        "title": "Science Site",
+        "rect": [
+          715,
+          80,
+          372,
+          251
+        ],
+        "inViewport": true,
+        "bodyScrolls": false,
+        "nestedScrollAreas": 0,
+        "actionsVisible": true,
+        "covered": false,
+        "badges": []
+      },
+      "targets": [
+        ".stop-pin",
+        ".hz-ico"
+      ]
+    }
+  },
+  "destination_set": true,
+  "hazards": 1,
+  "console_errors": []
+}

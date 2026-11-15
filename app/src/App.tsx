@@ -16,6 +16,7 @@ import { Hint, Icon, KindBadge, Mascot, Term } from "./components/ui";
 import { apiHealth, compareRoutes, loadStatic, planRoute, probeTerrain, type TerrainProbe } from "./lib/api";
 import { loadExtras, probeMinerals, type GeologyFile, type MineralProbe, type PhotosFile } from "./lib/nasaExtras";
 import { GroundView } from "./components/GroundView";
+import { loadWater, zoneStopName, zonePoiId, type WaterFile, type WaterZone } from "./lib/water";
 import { OBJECTIVE_META, OBJECTIVE_ORDER } from "./lib/compare";
 import { DEFAULT_EVA, evaPlan as computeEva, teamEvaPlan } from "./lib/eva";
 import { noRouteAlert, routeAlerts, sortAlerts, type Alert } from "./lib/safety";
@@ -59,8 +60,11 @@ export default function App() {
   const [left, setLeft] = useState<Left>(() => (typeof window !== "undefined" && window.innerWidth <= 1180 ? null : "layers"));
   const [layers, setLayers] = useState<Record<LayerKey, boolean>>({
     terrain: true, elevation: true, slope: true, geology: true, rover: false, weather: true,
-    hirise_img: false, geomap: false, minerals: false, photos: false,
+    hirise_img: false, geomap: false, minerals: false, photos: false, water: false,
   });
+  const [water, setWater] = useState<WaterFile | null>(null);
+  const [waterOpacity, setWaterOpacity] = useState(0.75);
+  const [waterZone, setWaterZone] = useState<string | null>(null);
   const [extras, setExtras] = useState<{ photos: PhotosFile | null; geology: GeologyFile | null }>({ photos: null, geology: null });
   const [mineralOpacity, setMineralOpacity] = useState(0.85);
   const [roverMaxSol, setRoverMaxSol] = useState<number | null>(null);
@@ -106,8 +110,9 @@ export default function App() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [activeIdx, setActiveIdx] = useState(0);
   const [planRequest, setPlanRequest] = useState(0);
-  /** Planner page: location clicked on the map, shown as a popup with Set Destination / Set Start / Add Waypoint. */
-  const [pick, setPick] = useState<{ lon: number; lat: number; key: number } | null>(null);
+  /** Planner page: location clicked on the map, shown in the map information panel with Set Destination / Set Start /
+   *  Add Waypoint. No re-key (it used to carry key: Date.now(), which re-mounted an auto-panning Leaflet popup on every click). */
+  const [pick, setPick] = useState<{ lon: number; lat: number } | null>(null);
   const [layersCollapsed, setLayersCollapsed] = useState(() => typeof window !== "undefined" && window.innerWidth <= 720);
   // Expedition Log: persisted on this device (localStorage; photo pixels in IndexedDB).
   const [expedition, setExpedition] = useState<Expedition | null>(() => loadExpedition());
@@ -117,6 +122,7 @@ export default function App() {
 
   useEffect(() => {
     void loadExtras().then(setExtras);
+    void loadWater().then(setWater);
   }, []);
 
   useEffect(() => {
@@ -244,7 +250,7 @@ export default function App() {
       }
       if (view === "planner") {
         const a = data?.manifest.aoi;
-        if (a && lon >= a.lon_min && lon <= a.lon_max && lat >= a.lat_min && lat <= a.lat_max) setPick({ lon, lat, key: Date.now() });
+        if (a && lon >= a.lon_min && lon <= a.lon_max && lat >= a.lat_min && lat <= a.lat_max) setPick({ lon, lat });
         else setPick(null);
         return;
       }
@@ -278,6 +284,23 @@ export default function App() {
   };
 
   const fly = (lon: number, lat: number, zoom?: number) => setFlyTarget({ lon, lat, zoom, key: Date.now() });
+
+  /* Ancient Water Evidence: explore a highlighted region, or make it the destination for the A* planner. */
+  const showWaterZone = (z: WaterZone) => {
+    setWaterZone(z.id);
+    setLayers((l) => ({ ...l, water: true }));
+    fly(z.target[0], z.target[1], 15);
+  };
+  /** `flyThere` is for the layers list; from the map itself the region is already on screen, so the map stays put. */
+  const setWaterDestination = (z: WaterZone, flyThere = true) => {
+    setWaterZone(z.id);
+    setLayers((l) => ({ ...l, water: true }));
+    if (mode === "team") setTeamStop("aDest", z.target[0], z.target[1], zoneStopName(z), zonePoiId(z));
+    else addStop("destination", z.target[0], z.target[1], zoneStopName(z), zonePoiId(z));
+    setPick(null);
+    if (view !== "planner") setView("planner");
+    if (flyThere) fly(z.target[0], z.target[1], 15);
+  };
 
   const sig = JSON.stringify({ stops, maxSlope, routeName, notes, objective, missionId, eva });
   const save = () => {
@@ -602,7 +625,7 @@ export default function App() {
 
         {view === "science" ? (
           <main className="science-main">
-            <ScienceView manifest={manifest} pois={pois} weather={weather} photos={extras.photos} geology={extras.geology} onOpenGroundView={(id) => setGroundView({ poiId: id })} />
+            <ScienceView manifest={manifest} pois={pois} weather={weather} photos={extras.photos} geology={extras.geology} water={water} onOpenGroundView={(id) => setGroundView({ poiId: id })} />
           </main>
         ) : view === "log" ? (
           <main className="science-main xlog-main">
@@ -655,6 +678,12 @@ export default function App() {
                 photos={extras.photos}
                 mineralOpacity={mineralOpacity}
                 setMineralOpacity={setMineralOpacity}
+                water={water}
+                waterOpacity={waterOpacity}
+                setWaterOpacity={setWaterOpacity}
+                waterZone={waterZone}
+                onShowWaterZone={showWaterZone}
+                onWaterDestination={(z) => setWaterDestination(z)}
                 roverMaxSol={roverMaxSol}
                 setRoverMaxSol={setRoverMaxSol}
                 onOpenGroundView={() => setGroundView({ poiId: null })}
@@ -785,6 +814,11 @@ export default function App() {
                   geology={extras.geology}
                   photos={extras.photos}
                   mineralOpacity={mineralOpacity}
+                  water={water}
+                  waterOpacity={waterOpacity}
+                  waterZone={waterZone}
+                  onWaterDestination={(z) => setWaterDestination(z, false)}
+                  onRemoveStop={(id) => setStops((s) => s.filter((x) => x.id !== id))}
                   roverMaxSol={roverMaxSol ?? undefined}
                   onOpenGroundView={(id) => setGroundView({ poiId: id })}
                   pick={view === "planner" ? pick : null}
@@ -921,6 +955,8 @@ export default function App() {
                 onPlan={planTo}
                 geology={extras.geology}
                 mineralProbe={mineralProbe}
+                water={layers.water ? water : null}
+                onWaterDestination={(lon, lat) => { addStop("destination", lon, lat, "Water evidence spot"); setView("planner"); }}
                 photos={extras.photos}
                 onOpenGroundView={(id) => setGroundView({ poiId: id })}
                 sheetOpen={sheetOpen}

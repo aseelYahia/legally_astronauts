@@ -166,6 +166,8 @@ GEO_SVC = "https://services.arcgis.com/v01gqwM5QqNysAAi/arcgis/rest/services/Jez
 MARS_LONLAT = CRS.from_proj4("+proj=longlat +R=3396190 +no_defs")
 
 # Soft Cosmic pastel palette; assigned per unit in order of area.
+# Pinned per unit so colours stay stable when areas change (Nle/Nue differ by < 0.01 km2 in the AOI).
+GEO_COLOR_BY_SYMBOL = {"NHjf2": "#A99BDD", "Njf": "#76C9C2", "Aeb": "#D98EBA", "Nue": "#E6C79C", "Nle": "#9FB8E8", "cr": "#C6A6E0"}
 GEO_COLORS = ["#A99BDD", "#76C9C2", "#D98EBA", "#E6C79C", "#9FB8E8", "#C6A6E0", "#8FD3A7", "#F0B59A", "#B8C4D6", "#E3A3C7", "#7FB3C9", "#CDB6A0"]
 
 
@@ -213,11 +215,14 @@ def build_geology() -> None:
                           "geometry": {"type": "MultiPolygon",
                                        "coordinates": [[[list(pt) for pt in r] for r in p] for p in polys]}})
     ordered = sorted(units.values(), key=lambda u: -u["area_km2_in_aoi"])
+    spare = [c for c in GEO_COLORS if c not in GEO_COLOR_BY_SYMBOL.values()]
     for i, u in enumerate(ordered):
-        u["color"] = GEO_COLORS[i % len(GEO_COLORS)]
+        u["color"] = GEO_COLOR_BY_SYMBOL.get(u["symbol"]) or spare[i % len(spare)]
         u["area_km2_in_aoi"] = round(u["area_km2_in_aoi"], 2)
     gj = {"type": "FeatureCollection", "units": ordered, "features": out_feats,
           "source": "USGS SIM 3464 (Sun & Stack 2020) via USGS ArcGIS feature service, layer 8",
+          "verification": "Matches the official USGS SIM 3464 database (Nili.gdb GeoUnits_v1): identical unit codes, IoU >= 0.9999, "
+                          "boundaries within 0.04 m (checked 2026-11-15, analysis/scripts/validate_geology_official.py).",
           "positional_note": "Drawn on a semi-controlled CTX mosaic; USGS states random offsets of about 100-200 m "
                              "relative to the Mars 2020 controlled CTX mosaic used for the PAWPRINT basemap."}
     (WEB / "geology_units.geojson").write_text(json.dumps(gj, ensure_ascii=False), encoding="utf-8")

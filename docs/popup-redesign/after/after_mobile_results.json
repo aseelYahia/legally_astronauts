@@ -1,0 +1,144 @@
+{
+  "tag": "after_mobile",
+  "viewport": [
+    390,
+    844
+  ],
+  "scenarios": {
+    "edge_left": {
+      "drift_px": 0.0,
+      "move_events": 0,
+      "fly_calls": 0,
+      "surface": {
+        "kind": "panel",
+        "covered_hint": true,
+        "layout": "sheet",
+        "rect": [
+          6,
+          458,
+          378,
+          324
+        ],
+        "inViewport": true,
+        "inMap": false,
+        "scrolls": false,
+        "scrollAreas": 0,
+        "title": "Selected location"
+      }
+    },
+    "edge_right": {
+      "drift_px": 0.0,
+      "move_events": 0,
+      "fly_calls": 0,
+      "surface": {
+        "kind": "panel",
+        "covered_hint": true,
+        "layout": "sheet",
+        "rect": [
+          6,
+          458,
+          378,
+          324
+        ],
+        "inViewport": true,
+        "inMap": false,
+        "scrolls": false,
+        "scrollAreas": 0,
+        "title": "Selected location"
+      }
+    },
+    "edge_top": {
+      "drift_px": 0.0,
+      "move_events": 0,
+      "fly_calls": 0,
+      "surface": {
+        "kind": "panel",
+        "covered_hint": false,
+        "layout": "sheet",
+        "rect": [
+          6,
+          504,
+          378,
+          278
+        ],
+        "inViewport": true,
+        "inMap": false,
+        "scrolls": false,
+        "scrollAreas": 0,
+        "title": "Selected location"
+      }
+    },
+    "edge_bottom": {
+      "drift_px": 0.0,
+      "move_events": 0,
+      "fly_calls": 0,
+      "surface": null
+    },
+    "sample_right_edge": {
+      "drift_px": 0.0,
+      "move_events": 0,
+      "fly_calls": 0,
+      "surface": {
+        "kind": "panel",
+        "covered_hint": true,
+        "layout": "sheet",
+        "rect": [
+          6,
+          472,
+          378,
+          310
+        ],
+        "inViewport": true,
+        "inMap": false,
+        "scrolls": false,
+        "scrollAreas": 0,
+        "title": "Base Camp"
+      }
+    },
+    "rapid_switch": {
+      "drift_px": 0.0,
+      "move_events": 0,
+      "fly_calls": 0,
+      "surface": {
+        "kind": "panel",
+        "covered_hint": true,
+        "layout": "sheet",
+        "rect": [
+          6,
+          375,
+          378,
+          407
+        ],
+        "inViewport": true,
+        "inMap": false,
+        "scrolls": false,
+        "scrollAreas": 0,
+        "title": "Octavia E. Butler Landing"
+      },
+      "markers_clicked": 1
+    },
+    "long_description": {
+      "drift_px": 0.0,
+      "move_events": 0,
+      "fly_calls": 0,
+      "surface": {
+        "kind": "panel",
+        "covered_hint": true,
+        "layout": "sheet",
+        "rect": [
+          6,
+          375,
+          378,
+          407
+        ],
+        "inViewport": true,
+        "inMap": false,
+        "scrolls": false,
+        "scrollAreas": 0,
+        "title": "Octavia E. Butler Landing"
+      }
+    }
+  },
+  "escape_closes": true,
+  "console_errors": []
+}

@@ -1,6 +1,7 @@
 import L from "leaflet";
 import { Fragment, memo, useEffect, useMemo, useRef, useState } from "react";
-import { CircleMarker, Marker, Pane, Polyline, Popup, useMap, useMapEvents } from "react-leaflet";
+import { CircleMarker, Marker, Pane, Polyline, useMap, useMapEvents } from "react-leaflet";
+import { useMapSelection } from "./MapSelectionContext";
 import { formatLat, formatLon } from "../../lib/mars";
 import { fmtDist, fmtMin, groupHazards, pickIconOffset, type HazardGroup, type RouteHazard } from "../../lib/routeHazards";
 import { WARNING_ICONS, type WarningIconKey } from "../../lib/warningCatalog";
@@ -53,7 +54,7 @@ function markerIcon(g: HazardGroup, off: [number, number], state: "" | "sel" | "
 }
 
 /** The explanation shown in the popup (also used by group popups). */
-export const HazardDetails = memo(function HazardDetails({ h }: { h: RouteHazard }) {
+export const HazardDetails = memo(function HazardDetails({ h, inPanel }: { h: RouteHazard; inPanel?: boolean }) {
   const T = h.kind === "climb";
   return (
     <div className="popup hz-pop" data-hazard-id={h.id}>
@@ -63,7 +64,7 @@ export const HazardDetails = memo(function HazardDetails({ h }: { h: RouteHazard
         <span className="hz-type">{h.label}</span>
         {h.astronaut && <span className={`hz-astro who-${h.astronaut}`}>Astronaut {h.astronaut}</span>}
       </div>
-      <div className="popup-title">{h.title.replace(/^Astronaut [AB]: /, "")}</div>
+      {!inPanel && <div className="popup-title">{h.title.replace(/^Astronaut [AB]: /, "")}</div>}
       <dl className="hz-facts">
         <dt>{T ? "Measured climb" : "Measured slope"}</dt>
         <dd>
@@ -106,7 +107,7 @@ export const HazardDetails = memo(function HazardDetails({ h }: { h: RouteHazard
   );
 });
 
-function GroupList({ g, onPick }: { g: HazardGroup; onPick: (h: RouteHazard) => void }) {
+export function GroupList({ g, onPick }: { g: HazardGroup; onPick: (h: RouteHazard) => void }) {
   return (
     <div className="popup hz-pop group-popup">
       <div className="popup-title">{g.members.length} route warnings here</div>
@@ -150,11 +151,23 @@ export function HazardLayer({ hazards, avoid, selectedAlertId = null, onSelectAl
       return true;
     }
   });
-  const [sel, setSelState] = useState<Sel>(null);
-  const selRef = useRef<Sel>(null);
+  // The selection lives in the shared map selection (the details show in the map information panel).
+  const ctx = useMapSelection();
+  const sel: Sel = ctx.sel?.kind === "hazard" ? { kind: "hazard", id: ctx.sel.id } : ctx.sel?.kind === "hazard-group" ? { kind: "group", key: ctx.sel.key } : null;
+  const selRef = useRef<Sel>(sel);
+  selRef.current = sel;
+  const groupsRef = useRef<HazardGroup[]>([]);
+  const quiet = useRef(false);
   const setSel = (s: Sel) => {
     selRef.current = s;
-    setSelState(s);
+    if (s?.kind === "hazard") ctx.select({ kind: "hazard", id: s.id });
+    else if (s?.kind === "group") {
+      const g = groupsRef.current.find((x) => x.key === s.key);
+      if (g) ctx.select({ kind: "hazard-group", key: g.key, members: g.members });
+    } else if (ctx.sel?.kind === "hazard" || ctx.sel?.kind === "hazard-group") {
+      quiet.current = true;
+      ctx.select(null); // never clear someone else's selection
+    }
   };
   const emitted = useRef<string | null | undefined>(undefined);
   const emit = (id: string | null) => {
@@ -182,6 +195,7 @@ export function HazardLayer({ hazards, avoid, selectedAlertId = null, onSelectAl
   }, [hazards]);
 
   const groups = useMemo(() => (show ? groupHazards(hazards, zoom) : []), [hazards, zoom, show]);
+  groupsRef.current = groups;
 
   // Icon offsets: CRS pixel coordinates at this zoom (pan-independent), so this only changes on zoom.
   const offsets = useMemo(() => {
@@ -202,10 +216,8 @@ export function HazardLayer({ hazards, avoid, selectedAlertId = null, onSelectAl
   const selHazard = sel?.kind === "hazard" ? hazards.find((h) => h.id === sel.id) ?? null : null;
   const matchesAlert = (h: RouteHazard, id: string | null) => !!id && (h.alertId === id || h.alsoAlertIds.includes(id));
 
-  const select = (h: RouteHazard) => {
-    setSel({ kind: "hazard", id: h.id });
-    emit(h.alertId);
-  };
+  // Selecting a warning (marker, group list in the panel, test hook) tells the board; see the effect below.
+  const select = (h: RouteHazard) => setSel({ kind: "hazard", id: h.id });
 
   // Board -> map: a warning picked on the board highlights its markers and flies there.
   const prevLocate = useRef(locateKey);
@@ -288,37 +300,26 @@ export function HazardLayer({ hazards, avoid, selectedAlertId = null, onSelectAl
     [groups, offsets, sel, related],
   );
 
-  // Popup: one standalone popup, keyed by the selection, with a memoized position/offset and memoized content,
-  // so map moves and unrelated re-renders never re-open or re-position it (no flicker).
-  const selGroup = sel?.kind === "group" ? groups.find((g) => g.key === sel.key) ?? null : null;
-  const popupAnchor = selHazard ?? selGroup?.members[0] ?? null;
-  const popupGroupKey = selHazard ? groups.find((g) => g.members.some((m) => m.id === selHazard.id))?.key : selGroup?.key;
-  const popupOff = popupGroupKey ? offsets[popupGroupKey] ?? [0, -30] : [0, -30];
-  const popupPos = useMemo(() => (popupAnchor ? ([selGroup ? selGroup.at[1] : popupAnchor.at[1], selGroup ? selGroup.at[0] : popupAnchor.at[0]] as [number, number]) : null), [popupAnchor, selGroup]);
-  const popupOffset = useMemo(() => L.point(popupOff[0], popupOff[1] - 6), [popupOff[0], popupOff[1]]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Closing the details panel (X, Esc) or selecting something else on the map un-highlights a warning that was
+  // picked on the board. Internal clears (route changed, markers hidden, board cleared) stay quiet.
+  const prevSel = useRef<Sel>(sel);
   const selKey = sel ? (sel.kind === "hazard" ? sel.id : `g:${sel.key}`) : "";
-  const onRemove = useMemo(
-    () => ({
-      remove: () => {
-        // only a user close (X / map click) clears; switching selection already moved selRef on
-        const cur = selRef.current;
-        const mine = cur && (cur.kind === "hazard" ? cur.id : `g:${cur.key}`) === selKey;
-        if (!mine) return;
-        setSel(null);
-        if (cur?.kind === "hazard") {
-          const h = hazards.find((x) => x.id === cur.id);
-          if (h && matchesAlert(h, selectedAlertId)) emit(null);
-        }
-      },
-    }),
+  useEffect(() => {
+    const prev = prevSel.current;
+    prevSel.current = sel;
+    if (quiet.current) {
+      quiet.current = false;
+      return;
+    }
+    if (sel?.kind === "hazard") {
+      const h = hazards.find((x) => x.id === sel.id);
+      if (h && !matchesAlert(h, selectedAlertId)) emit(h.alertId);
+    } else if (prev?.kind === "hazard") {
+      const h = hazards.find((x) => x.id === prev.id);
+      if (h && matchesAlert(h, selectedAlertId)) emit(null);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selKey, hazards, selectedAlertId],
-  );
-  const content = useMemo(
-    () => (selHazard ? <HazardDetails h={selHazard} /> : selGroup ? <GroupList g={selGroup} onPick={select} /> : null),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selHazard, selGroup],
-  );
+  }, [selKey]);
 
   // toggle control (screen space, outside the map panes)
   const ctrl = useRef<HTMLDivElement>(null);
@@ -346,11 +347,6 @@ export function HazardLayer({ hazards, avoid, selectedAlertId = null, onSelectAl
         )}
       </Pane>
       {markers}
-      {show && popupPos && content && (
-        <Popup key={selKey} position={popupPos} offset={popupOffset} className="hz-popup" maxWidth={330} minWidth={280} autoPanPaddingTopLeft={[40, 150]} autoPanPaddingBottomRight={[80, 60]} eventHandlers={onRemove}>
-          {content}
-        </Popup>
-      )}
       {hazards.length > 0 && (
         <div className="hz-toggle" ref={ctrl}>
           <button aria-pressed={show} onClick={() => toggle(!show)} title={show ? "Hide route warning markers" : "Show route warning markers"}>

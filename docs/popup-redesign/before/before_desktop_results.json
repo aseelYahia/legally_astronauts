@@ -1,0 +1,144 @@
+{
+  "tag": "before_desktop",
+  "viewport": [
+    1440,
+    900
+  ],
+  "scenarios": {
+    "edge_left": {
+      "drift_px": 174.82562741200158,
+      "move_events": 24,
+      "fly_calls": 0,
+      "surface": {
+        "kind": "popup",
+        "rect": [
+          127,
+          386,
+          337,
+          157
+        ],
+        "inViewport": true,
+        "inMap": true,
+        "scrolls": false,
+        "scrollAreas": 0,
+        "title": "Selected location"
+      }
+    },
+    "edge_right": {
+      "drift_px": 162.19741058352318,
+      "move_events": 33,
+      "fly_calls": 0,
+      "surface": {
+        "kind": "popup",
+        "rect": [
+          698,
+          528,
+          337,
+          157
+        ],
+        "inViewport": true,
+        "inMap": true,
+        "scrolls": false,
+        "scrollAreas": 0,
+        "title": "Selected location"
+      }
+    },
+    "edge_top": {
+      "drift_px": 136.0,
+      "move_events": 31,
+      "fly_calls": 0,
+      "surface": {
+        "kind": "popup",
+        "rect": [
+          378,
+          357,
+          337,
+          157
+        ],
+        "inViewport": true,
+        "inMap": true,
+        "scrolls": false,
+        "scrollAreas": 0,
+        "title": "Selected location"
+      }
+    },
+    "edge_bottom": {
+      "drift_px": 0.0,
+      "move_events": 0,
+      "fly_calls": 0,
+      "surface": {
+        "kind": "popup",
+        "rect": [
+          378,
+          357,
+          337,
+          157
+        ],
+        "inViewport": true,
+        "inMap": true,
+        "scrolls": false,
+        "scrollAreas": 0,
+        "title": "Selected location"
+      }
+    },
+    "sample_right_edge": {
+      "drift_px": 122.37646832622684,
+      "move_events": 33,
+      "fly_calls": 0,
+      "surface": {
+        "kind": "popup",
+        "rect": [
+          698,
+          359,
+          337,
+          157
+        ],
+        "inViewport": true,
+        "inMap": true,
+        "scrolls": false,
+        "scrollAreas": 0,
+        "title": "Selected location"
+      }
+    },
+    "rapid_switch": {
+      "drift_px": 95.5405672999695,
+      "move_events": 12,
+      "fly_calls": 0,
+      "surface": {
+        "kind": "popup",
+        "rect": [
+          523,
+          503,
+          337,
+          157
+        ],
+        "inViewport": true,
+        "inMap": true,
+        "scrolls": false,
+        "scrollAreas": 0,
+        "title": "Selected location"
+      },
+      "markers_clicked": 2
+    },
+    "long_description": {
+      "drift_px": 99.53893710503444,
+      "move_events": 23,
+      "fly_calls": 0,
+      "surface": {
+        "kind": "popup",
+        "rect": [
+          481,
+          357,
+          349,
+          261
+        ],
+        "inViewport": true,
+        "inMap": true,
+        "scrolls": false,
+        "scrollAreas": 0,
+        "title": "Octavia E. Butler Landing"
+      }
+    }
+  },
+  "console_errors": []
+}
